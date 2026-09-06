@@ -1,0 +1,9 @@
+CREATE TABLE projects (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    name VARCHAR(150) NOT NULL UNIQUE,
+    description TEXT,
+    status VARCHAR(30) NOT NULL DEFAULT 'ACTIVE',
+    created_at TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP NOT NULL,
+    CONSTRAINT chk_projects_status CHECK (status IN ('ACTIVE', 'INACTIVE', 'COMPLETED'))
+);

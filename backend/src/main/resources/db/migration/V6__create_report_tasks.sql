@@ -1,0 +1,20 @@
+CREATE TABLE report_tasks (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    report_id BIGINT NOT NULL,
+    task_name VARCHAR(255) NOT NULL,
+    description TEXT,
+    status VARCHAR(30) NOT NULL,
+    priority VARCHAR(30) NOT NULL,
+    planned_percentage INTEGER NOT NULL,
+    actual_percentage INTEGER NOT NULL,
+    hours_planned DECIMAL(6,2) NOT NULL DEFAULT 0,
+    hours_spent DECIMAL(6,2) NOT NULL DEFAULT 0,
+    deliverable VARCHAR(500),
+    created_at TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP NOT NULL,
+    CONSTRAINT fk_report_tasks_report FOREIGN KEY (report_id) REFERENCES weekly_reports(id) ON DELETE CASCADE,
+    CONSTRAINT chk_report_tasks_status CHECK (status IN ('NOT_STARTED', 'IN_PROGRESS', 'COMPLETED', 'BLOCKED')),
+    CONSTRAINT chk_report_tasks_priority CHECK (priority IN ('LOW', 'MEDIUM', 'HIGH')),
+    CONSTRAINT chk_report_tasks_planned_percentage CHECK (planned_percentage BETWEEN 0 AND 100),
+    CONSTRAINT chk_report_tasks_actual_percentage CHECK (actual_percentage BETWEEN 0 AND 100)
+);

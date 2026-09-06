@@ -1,0 +1,8 @@
+CREATE TABLE roles (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    name VARCHAR(50) NOT NULL UNIQUE,
+    description VARCHAR(255),
+    created_at TIMESTAMP NOT NULL,
+    updated_at TIMESTAMP NOT NULL,
+    CONSTRAINT chk_roles_name CHECK (name IN ('TEAM_MEMBER', 'MANAGER', 'ADMIN'))
+);
