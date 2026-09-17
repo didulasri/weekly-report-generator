@@ -1,4 +1,5 @@
 # Weekly Report Generator & Team Dashboard
+
 # API Design Document
 
 ## 1. API Conventions
@@ -98,6 +99,7 @@ Purpose: Get currently authenticated user.
     GET /api/projects
 
 Access:
+
 - TEAM_MEMBER
 - MANAGER
 - ADMIN
@@ -113,6 +115,7 @@ Optional filters:
     POST /api/projects
 
 Access:
+
 - MANAGER
 - ADMIN
 
@@ -136,6 +139,7 @@ Request:
     PUT /api/projects/{id}
 
 Access:
+
 - MANAGER
 - ADMIN
 
@@ -146,6 +150,7 @@ Access:
     DELETE /api/projects/{id}
 
 Access:
+
 - MANAGER
 - ADMIN
 
@@ -160,9 +165,11 @@ Recommended: Prefer soft delete/deactivation if projects have historical reports
     POST /api/reports
 
 Access:
+
 - TEAM_MEMBER
 
 Request includes:
+
 - week start/end.
 - project.
 - notes.
@@ -194,6 +201,7 @@ Optional query parameters:
     GET /api/reports/{id}
 
 Authorization:
+
 - Owner.
 - Authorized manager.
 - Admin.
@@ -205,6 +213,7 @@ Authorization:
     PUT /api/reports/{id}
 
 Allowed:
+
 - DRAFT.
 - NEEDS_CORRECTION.
 
@@ -226,6 +235,7 @@ Status transition:
     DELETE /api/reports/{id}
 
 Recommended rule:
+
 - Only owner.
 - Only DRAFT status.
 
@@ -236,91 +246,31 @@ Recommended rule:
     GET /api/reports/{id}/history
 
 Returns:
+
 - Review history.
 - Optional version history.
 
 ---
 
-# 5. Report Task APIs
+# 5. Report Sub-Resources — Design Decision
 
-## Get Tasks
+Tasks, next-week tasks, blockers, achievements and work hours are NOT
+exposed as separate endpoints. They are children of the report aggregate
+and are created, replaced and deleted through:
 
-    GET /api/reports/{reportId}/tasks
+    POST /api/reports
+    PUT  /api/reports/{id}
 
-## Add Task
+Rationale: the report form is edited and saved as a single unit, so one
+transactional write is both correct and simpler. This keeps version
+snapshots atomic, makes the single-key-blocker rule enforceable without
+a race condition, and puts the ownership and editable-status guard in
+one place instead of twenty.
 
-    POST /api/reports/{reportId}/tasks
+Per-row endpoints can be added later without changing this contract if
+the UI ever needs inline autosave.
 
-Request:
-
-    {
-      "taskName": "Implement authentication",
-      "priority": "HIGH",
-      "plannedPercentage": 100,
-      "actualPercentage": 80,
-      "status": "IN_PROGRESS",
-      "timePlanned": 8,
-      "timeSpent": 7,
-      "deliverable": "Authentication module"
-    }
-
-## Update Task
-
-    PUT /api/reports/{reportId}/tasks/{taskId}
-
-## Delete Task
-
-    DELETE /api/reports/{reportId}/tasks/{taskId}
-
----
-
-# 6. Next Week Task APIs
-
-    GET    /api/reports/{reportId}/next-week-tasks
-    POST   /api/reports/{reportId}/next-week-tasks
-    PUT    /api/reports/{reportId}/next-week-tasks/{taskId}
-    DELETE /api/reports/{reportId}/next-week-tasks/{taskId}
-
----
-
-# 7. Blocker APIs
-
-    GET    /api/reports/{reportId}/blockers
-    POST   /api/reports/{reportId}/blockers
-    PUT    /api/reports/{reportId}/blockers/{blockerId}
-    DELETE /api/reports/{reportId}/blockers/{blockerId}
-
-Business rule:
-- Validate key issue selection if only one key blocker is allowed.
-
----
-
-# 8. Achievement APIs
-
-    GET    /api/reports/{reportId}/achievements
-    POST   /api/reports/{reportId}/achievements
-    PUT    /api/reports/{reportId}/achievements/{achievementId}
-    DELETE /api/reports/{reportId}/achievements/{achievementId}
-
----
-
-# 9. Work Hour APIs
-
-    GET    /api/reports/{reportId}/work-hours
-    POST   /api/reports/{reportId}/work-hours
-    PUT    /api/reports/{reportId}/work-hours/{workHourId}
-    DELETE /api/reports/{reportId}/work-hours/{workHourId}
-
-Example request:
-
-    {
-      "taskType": "Development",
-      "hours": 20
-    }
-
----
-
-# 10. Manager Report APIs
+# 6. Manager Report APIs
 
 All manager endpoints require MANAGER or ADMIN.
 
@@ -377,6 +327,7 @@ Transition:
     SUBMITTED -> NEEDS_CORRECTION
 
 Validation:
+
 - Comment should be required.
 
 ---
@@ -391,13 +342,14 @@ Optional filters:
 
 ---
 
-# 11. Dashboard APIs
+# 7. Dashboard APIs
 
 ## Dashboard Summary
 
     GET /api/dashboard/summary
 
 Returns:
+
 - Total reports.
 - Submitted reports.
 - Approved reports.
@@ -441,7 +393,7 @@ Returns hours grouped by task type.
 
 ---
 
-# 12. User Management APIs
+# 8. User Management APIs
 
 Admin endpoints.
 
@@ -477,14 +429,16 @@ Request:
 
 ---
 
-# 13. Standard HTTP Responses
+# 9. Standard HTTP Responses
 
 ## Success
+
 - 200 OK: successful GET/PUT/PATCH.
 - 201 Created: successful POST creation.
 - 204 No Content: successful deletion.
 
 ## Client errors
+
 - 400 Bad Request.
 - 401 Unauthorized.
 - 403 Forbidden.
@@ -492,11 +446,12 @@ Request:
 - 409 Conflict.
 
 ## Server error
+
 - 500 Internal Server Error.
 
 ---
 
-# 14. Standard Error Response
+# 10. Standard Error Response
 
 Recommended format:
 
@@ -510,21 +465,21 @@ Recommended format:
 
 ---
 
-# 15. API Security Matrix
+# 11. API Security Matrix
 
-| Endpoint Group | TEAM_MEMBER | MANAGER | ADMIN |
-|---|---|---|---|
-| Authentication | Yes | Yes | Yes |
-| Own Reports | Yes | Yes | Yes |
-| Other Users' Reports | No | Yes | Yes |
-| Manager Review | No | Yes | Yes |
-| Dashboard | No | Yes | Yes |
-| Project Management | Read | Full | Full |
-| User Management | No | Limited/No | Full |
+| Endpoint Group       | TEAM_MEMBER | MANAGER    | ADMIN |
+| -------------------- | ----------- | ---------- | ----- |
+| Authentication       | Yes         | Yes        | Yes   |
+| Own Reports          | Yes         | Yes        | Yes   |
+| Other Users' Reports | No          | Yes        | Yes   |
+| Manager Review       | No          | Yes        | Yes   |
+| Dashboard            | No          | Yes        | Yes   |
+| Project Management   | Read        | Full       | Full  |
+| User Management      | No          | Limited/No | Full  |
 
 ---
 
-# 16. Recommended Endpoint Development Order
+# 12. Recommended Endpoint Development Order
 
 1. `/api/auth/register`
 2. `/api/auth/login`
@@ -543,7 +498,7 @@ Recommended format:
 
 ---
 
-# 17. API Design Notes
+# 13. API Design Notes
 
 - Use DTOs instead of returning JPA entities directly.
 - Use pagination for list APIs.

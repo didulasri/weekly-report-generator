@@ -3,7 +3,10 @@ package com.weeklyreportgenerator.backend.entity;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+
+import org.hibernate.Hibernate;
 
 import com.weeklyreportgenerator.backend.entity.enums.ReportStatus;
 
@@ -17,6 +20,7 @@ import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.OneToMany;
 import jakarta.persistence.Table;
+import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
@@ -64,22 +68,32 @@ public class WeeklyReport extends BaseEntity {
     @Column(name = "submitted_at")
     private Instant submittedAt;
 
+    @Getter(AccessLevel.NONE)
+    @Setter(AccessLevel.NONE)
     @Builder.Default
     @OneToMany(mappedBy = "report", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<ReportTask> tasks = new ArrayList<>();
 
+    @Getter(AccessLevel.NONE)
+    @Setter(AccessLevel.NONE)
     @Builder.Default
     @OneToMany(mappedBy = "report", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<NextWeekTask> nextWeekTasks = new ArrayList<>();
 
+    @Getter(AccessLevel.NONE)
+    @Setter(AccessLevel.NONE)
     @Builder.Default
     @OneToMany(mappedBy = "report", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<Blocker> blockers = new ArrayList<>();
 
+    @Getter(AccessLevel.NONE)
+    @Setter(AccessLevel.NONE)
     @Builder.Default
     @OneToMany(mappedBy = "report", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<Achievement> achievements = new ArrayList<>();
 
+    @Getter(AccessLevel.NONE)
+    @Setter(AccessLevel.NONE)
     @Builder.Default
     @OneToMany(mappedBy = "report", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<WorkHour> workHours = new ArrayList<>();
@@ -91,4 +105,110 @@ public class WeeklyReport extends BaseEntity {
     @Builder.Default
     @OneToMany(mappedBy = "report", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<ReportVersion> versions = new ArrayList<>();
+
+    // Forces each lazy child collection to load while a session is still open. Must touch the raw
+    // fields directly -- Hibernate.initialize() is a no-op on the unmodifiableList wrapper the
+    // getters return, since that wrapper isn't a Hibernate PersistentCollection.
+    public void initializeChildCollections() {
+        Hibernate.initialize(tasks);
+        Hibernate.initialize(nextWeekTasks);
+        Hibernate.initialize(blockers);
+        Hibernate.initialize(achievements);
+        Hibernate.initialize(workHours);
+    }
+
+    public List<ReportTask> getTasks() {
+        return Collections.unmodifiableList(tasks);
+    }
+
+    public void addTask(ReportTask task) {
+        tasks.add(task);
+        task.setReport(this);
+    }
+
+    public void removeTask(ReportTask task) {
+        tasks.remove(task);
+        task.setReport(null);
+    }
+
+    public void clearTasks() {
+        tasks.forEach(t -> t.setReport(null));
+        tasks.clear();
+    }
+
+    public List<NextWeekTask> getNextWeekTasks() {
+        return Collections.unmodifiableList(nextWeekTasks);
+    }
+
+    public void addNextWeekTask(NextWeekTask task) {
+        nextWeekTasks.add(task);
+        task.setReport(this);
+    }
+
+    public void removeNextWeekTask(NextWeekTask task) {
+        nextWeekTasks.remove(task);
+        task.setReport(null);
+    }
+
+    public void clearNextWeekTasks() {
+        nextWeekTasks.forEach(t -> t.setReport(null));
+        nextWeekTasks.clear();
+    }
+
+    public List<Blocker> getBlockers() {
+        return Collections.unmodifiableList(blockers);
+    }
+
+    public void addBlocker(Blocker blocker) {
+        blockers.add(blocker);
+        blocker.setReport(this);
+    }
+
+    public void removeBlocker(Blocker blocker) {
+        blockers.remove(blocker);
+        blocker.setReport(null);
+    }
+
+    public void clearBlockers() {
+        blockers.forEach(b -> b.setReport(null));
+        blockers.clear();
+    }
+
+    public List<Achievement> getAchievements() {
+        return Collections.unmodifiableList(achievements);
+    }
+
+    public void addAchievement(Achievement achievement) {
+        achievements.add(achievement);
+        achievement.setReport(this);
+    }
+
+    public void removeAchievement(Achievement achievement) {
+        achievements.remove(achievement);
+        achievement.setReport(null);
+    }
+
+    public void clearAchievements() {
+        achievements.forEach(a -> a.setReport(null));
+        achievements.clear();
+    }
+
+    public List<WorkHour> getWorkHours() {
+        return Collections.unmodifiableList(workHours);
+    }
+
+    public void addWorkHour(WorkHour workHour) {
+        workHours.add(workHour);
+        workHour.setReport(this);
+    }
+
+    public void removeWorkHour(WorkHour workHour) {
+        workHours.remove(workHour);
+        workHour.setReport(null);
+    }
+
+    public void clearWorkHours() {
+        workHours.forEach(w -> w.setReport(null));
+        workHours.clear();
+    }
 }

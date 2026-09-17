@@ -28,6 +28,11 @@ public class GlobalExceptionHandler {
         return build(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", message, request);
     }
 
+    @ExceptionHandler(InvalidRequestException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidRequest(InvalidRequestException ex, HttpServletRequest request) {
+        return build(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", ex.getMessage(), request);
+    }
+
     @ExceptionHandler(BadCredentialsException.class)
     public ResponseEntity<ErrorResponse> handleBadCredentials(BadCredentialsException ex, HttpServletRequest request) {
         return build(HttpStatus.UNAUTHORIZED, "UNAUTHORIZED", "Invalid email or password", request);
@@ -45,6 +50,12 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(DuplicateResourceException.class)
     public ResponseEntity<ErrorResponse> handleDuplicate(DuplicateResourceException ex, HttpServletRequest request) {
+        return build(HttpStatus.CONFLICT, "CONFLICT", ex.getMessage(), request);
+    }
+
+    @ExceptionHandler(InvalidStatusTransitionException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidStatusTransition(
+            InvalidStatusTransitionException ex, HttpServletRequest request) {
         return build(HttpStatus.CONFLICT, "CONFLICT", ex.getMessage(), request);
     }
 
