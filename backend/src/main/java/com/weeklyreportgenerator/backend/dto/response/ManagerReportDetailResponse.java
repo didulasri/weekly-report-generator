@@ -1,0 +1,21 @@
+package com.weeklyreportgenerator.backend.dto.response;
+
+import java.util.List;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+
+@Getter
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+public class ManagerReportDetailResponse {
+
+    private ReportDetailResponse report;
+    private String ownerName;
+    private String ownerEmail;
+    private List<ReviewResponse> reviews;
+    private List<ReportVersionSummaryResponse> versions;
+}

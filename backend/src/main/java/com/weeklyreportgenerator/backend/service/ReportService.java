@@ -3,6 +3,7 @@ package com.weeklyreportgenerator.backend.service;
 import java.math.BigDecimal;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 
 import org.hibernate.Hibernate;
@@ -19,11 +20,14 @@ import com.weeklyreportgenerator.backend.dto.request.NextWeekTaskRequest;
 import com.weeklyreportgenerator.backend.dto.request.TaskRequest;
 import com.weeklyreportgenerator.backend.dto.request.UpdateReportRequest;
 import com.weeklyreportgenerator.backend.dto.request.WorkHourRequest;
+import com.weeklyreportgenerator.backend.dto.response.ReportDetailResponse;
 import com.weeklyreportgenerator.backend.entity.Achievement;
 import com.weeklyreportgenerator.backend.entity.Blocker;
 import com.weeklyreportgenerator.backend.entity.NextWeekTask;
 import com.weeklyreportgenerator.backend.entity.Project;
+import com.weeklyreportgenerator.backend.entity.ReportReview;
 import com.weeklyreportgenerator.backend.entity.ReportTask;
+import com.weeklyreportgenerator.backend.entity.ReportVersion;
 import com.weeklyreportgenerator.backend.entity.User;
 import com.weeklyreportgenerator.backend.entity.WeeklyReport;
 import com.weeklyreportgenerator.backend.entity.WorkHour;
@@ -31,11 +35,15 @@ import com.weeklyreportgenerator.backend.entity.enums.BlockerStatus;
 import com.weeklyreportgenerator.backend.entity.enums.Priority;
 import com.weeklyreportgenerator.backend.entity.enums.ProjectStatus;
 import com.weeklyreportgenerator.backend.entity.enums.ReportStatus;
+import com.weeklyreportgenerator.backend.entity.enums.RoleName;
 import com.weeklyreportgenerator.backend.exception.DuplicateResourceException;
 import com.weeklyreportgenerator.backend.exception.InvalidRequestException;
+import com.weeklyreportgenerator.backend.exception.ReportSubmissionValidationException;
 import com.weeklyreportgenerator.backend.exception.ResourceNotFoundException;
 import com.weeklyreportgenerator.backend.repository.ProjectRepository;
+import com.weeklyreportgenerator.backend.repository.ReportReviewRepository;
 import com.weeklyreportgenerator.backend.repository.ReportTaskRepository;
+import com.weeklyreportgenerator.backend.repository.ReportVersionRepository;
 import com.weeklyreportgenerator.backend.repository.UserRepository;
 import com.weeklyreportgenerator.backend.repository.WeeklyReportRepository;
 import com.weeklyreportgenerator.backend.repository.WeeklyReportSpecifications;
@@ -53,7 +61,10 @@ public class ReportService {
     private final UserRepository userRepository;
     private final ReportTaskRepository reportTaskRepository;
     private final WorkHourRepository workHourRepository;
+    private final ReportVersionRepository reportVersionRepository;
+    private final ReportReviewRepository reportReviewRepository;
     private final ReportWorkflowService reportWorkflowService;
+    private final ReportSnapshotService reportSnapshotService;
 
     @Transactional
     public WeeklyReport createReport(CreateReportRequest request) {
@@ -135,6 +146,20 @@ public class ReportService {
         return report;
     }
 
+    @Transactional(readOnly = true)
+    public List<ReportReview> getReviewHistory(Long reportId) {
+        Long userId = SecurityUtils.getCurrentUserId();
+        assertOwnedByCurrentUser(reportId, userId);
+        return reportReviewRepository.findByReportIdOrderByReviewedAtDesc(reportId);
+    }
+
+    @Transactional(readOnly = true)
+    public String latestReviewComment(Long reportId) {
+        return reportReviewRepository.findFirstByReportIdOrderByReviewedAtDesc(reportId)
+                .map(ReportReview::getComment)
+                .orElse(null);
+    }
+
     // Hibernate can't join-fetch multiple List collections in one query (MultipleBagFetchException),
     // so each child collection is lazily initialized here individually, still inside the transaction,
     // before the entity is handed back to the mapper outside of it.
@@ -179,6 +204,138 @@ public class ReportService {
         reportWorkflowService.assertDeletable(report);
 
         weeklyReportRepository.delete(report);
+    }
+
+    @Transactional
+    public WeeklyReport submitReport(Long id) {
+        Long userId = SecurityUtils.getCurrentUserId();
+
+        WeeklyReport report = weeklyReportRepository.findByIdAndUserId(id, userId)
+                .orElseThrow(() -> new ResourceNotFoundException("Report not found: " + id));
+
+        ReportStatus previousStatus = report.getStatus();
+
+        User actor = userRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("User not found: " + userId));
+
+        // Illegal for the current status -> InvalidStatusTransitionException -> 409.
+        reportWorkflowService.transition(report, ReportAction.SUBMIT, actor);
+
+        // Content incomplete -> ReportSubmissionValidationException -> 400 with every failure listed.
+        validateCompleteness(report);
+
+        if (previousStatus == ReportStatus.NEEDS_CORRECTION) {
+            report.setCurrentVersion(report.getCurrentVersion() + 1);
+        }
+
+        String snapshotJson = reportSnapshotService.serialize(report);
+        ReportVersion version = ReportVersion.builder()
+                .versionNumber(report.getCurrentVersion())
+                .snapshotData(snapshotJson)
+                .submittedAt(report.getSubmittedAt())
+                .build();
+        report.addVersion(version);
+
+        return weeklyReportRepository.save(report);
+    }
+
+    // MANAGER/ADMIN can read any report's versions; TEAM_MEMBER only their own. See canAccessReport --
+    // the one place that branch lives, so it isn't duplicated between this and getVersionSnapshot.
+    @Transactional(readOnly = true)
+    public List<ReportVersion> listVersions(Long reportId) {
+        loadAccessibleReport(reportId);
+        return reportVersionRepository.findByReportIdOrderByVersionNumberDesc(reportId);
+    }
+
+    @Transactional(readOnly = true)
+    public ReportDetailResponse getVersionSnapshot(Long reportId, Integer versionNumber) {
+        loadAccessibleReport(reportId);
+
+        ReportVersion version = reportVersionRepository.findByReportIdAndVersionNumber(reportId, versionNumber)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Version " + versionNumber + " not found for report " + reportId));
+
+        return reportSnapshotService.deserialize(version.getSnapshotData());
+    }
+
+    private void assertOwnedByCurrentUser(Long reportId, Long userId) {
+        if (weeklyReportRepository.findByIdAndUserId(reportId, userId).isEmpty()) {
+            throw new ResourceNotFoundException("Report not found: " + reportId);
+        }
+    }
+
+    private WeeklyReport loadAccessibleReport(Long reportId) {
+        Long userId = SecurityUtils.getCurrentUserId();
+        WeeklyReport report = weeklyReportRepository.findById(reportId)
+                .orElseThrow(() -> new ResourceNotFoundException("Report not found: " + reportId));
+        User actor = userRepository.findByIdWithRole(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("User not found: " + userId));
+        if (!canAccessReport(report, actor)) {
+            throw new ResourceNotFoundException("Report not found: " + reportId);
+        }
+        return report;
+    }
+
+    private boolean canAccessReport(WeeklyReport report, User actor) {
+        RoleName role = actor.getRole().getName();
+        return role == RoleName.MANAGER || role == RoleName.ADMIN
+                || report.getUser().getId().equals(actor.getId());
+    }
+
+    private void validateCompleteness(WeeklyReport report) {
+        List<String> errors = new ArrayList<>();
+
+        List<ReportTask> tasks = report.getTasks();
+        if (tasks.isEmpty()) {
+            errors.add("At least one task is required before submitting");
+        } else {
+            for (int i = 0; i < tasks.size(); i++) {
+                ReportTask task = tasks.get(i);
+                if (task.getTaskName() == null || task.getTaskName().isBlank()) {
+                    errors.add("tasks[" + i + "].taskName is required");
+                }
+                if (task.getStatus() == null) {
+                    errors.add("tasks[" + i + "].status is required");
+                }
+                if (task.getPriority() == null) {
+                    errors.add("tasks[" + i + "].priority is required");
+                }
+            }
+        }
+
+        if (report.getSummary() == null || report.getSummary().isBlank()) {
+            errors.add("summary is required");
+        }
+
+        List<Blocker> blockers = report.getBlockers();
+        if (!blockers.isEmpty()) {
+            long keyIssueCount = blockers.stream().filter(Blocker::isKeyIssue).count();
+            if (keyIssueCount != 1) {
+                errors.add("Exactly one blocker must be marked as the key issue when blockers are present");
+            }
+        }
+
+        List<Achievement> achievements = report.getAchievements();
+        if (!achievements.isEmpty()) {
+            long keyAchievementCount = achievements.stream().filter(Achievement::isKeyAchievement).count();
+            if (keyAchievementCount != 1) {
+                errors.add("Exactly one achievement must be marked as the key achievement when achievements are present");
+            }
+        }
+
+        List<WorkHour> workHours = report.getWorkHours();
+        if (!workHours.isEmpty()) {
+            BigDecimal total = workHours.stream()
+                    .map(WorkHour::getHours)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            if (total.compareTo(BigDecimal.ZERO) <= 0) {
+                errors.add("Total work hours must be greater than zero when work-hour rows are present");
+            }
+        }
+
+        if (!errors.isEmpty()) {
+            throw new ReportSubmissionValidationException(errors);
+        }
     }
 
     private void validateWeekDates(LocalDate weekStartDate, LocalDate weekEndDate) {

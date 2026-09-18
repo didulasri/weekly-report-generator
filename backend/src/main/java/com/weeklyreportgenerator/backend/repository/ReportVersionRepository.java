@@ -11,5 +11,7 @@ public interface ReportVersionRepository extends JpaRepository<ReportVersion, Lo
 
     List<ReportVersion> findByReportId(Long reportId);
 
+    List<ReportVersion> findByReportIdOrderByVersionNumberDesc(Long reportId);
+
     Optional<ReportVersion> findByReportIdAndVersionNumber(Long reportId, Integer versionNumber);
 }

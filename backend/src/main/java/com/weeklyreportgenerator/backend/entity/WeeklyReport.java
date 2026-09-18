@@ -50,6 +50,7 @@ public class WeeklyReport extends BaseEntity {
     @Column(name = "week_end_date", nullable = false)
     private LocalDate weekEndDate;
 
+    @Setter(AccessLevel.NONE)
     @Builder.Default
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 30)
@@ -65,6 +66,7 @@ public class WeeklyReport extends BaseEntity {
     @Column(name = "current_version", nullable = false)
     private Integer currentVersion = 1;
 
+    @Setter(AccessLevel.NONE)
     @Column(name = "submitted_at")
     private Instant submittedAt;
 
@@ -98,10 +100,14 @@ public class WeeklyReport extends BaseEntity {
     @OneToMany(mappedBy = "report", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<WorkHour> workHours = new ArrayList<>();
 
+    @Getter(AccessLevel.NONE)
+    @Setter(AccessLevel.NONE)
     @Builder.Default
     @OneToMany(mappedBy = "report", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<ReportReview> reviews = new ArrayList<>();
 
+    @Getter(AccessLevel.NONE)
+    @Setter(AccessLevel.NONE)
     @Builder.Default
     @OneToMany(mappedBy = "report", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<ReportVersion> versions = new ArrayList<>();
@@ -210,5 +216,32 @@ public class WeeklyReport extends BaseEntity {
     public void clearWorkHours() {
         workHours.forEach(w -> w.setReport(null));
         workHours.clear();
+    }
+
+    // The only way status/submittedAt ever change. Called exclusively by ReportWorkflowService --
+    // that's the one-word answer to "where do status changes happen?"
+    public void applyStatusChange(ReportStatus newStatus, Instant submittedAt) {
+        this.status = newStatus;
+        if (submittedAt != null) {
+            this.submittedAt = submittedAt;
+        }
+    }
+
+    public List<ReportVersion> getVersions() {
+        return Collections.unmodifiableList(versions);
+    }
+
+    public void addVersion(ReportVersion version) {
+        versions.add(version);
+        version.setReport(this);
+    }
+
+    public List<ReportReview> getReviews() {
+        return Collections.unmodifiableList(reviews);
+    }
+
+    public void addReview(ReportReview review) {
+        reviews.add(review);
+        review.setReport(this);
     }
 }

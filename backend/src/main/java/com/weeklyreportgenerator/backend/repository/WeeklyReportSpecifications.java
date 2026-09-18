@@ -15,6 +15,9 @@ public final class WeeklyReportSpecifications {
     }
 
     public static Specification<WeeklyReport> hasUserId(Long userId) {
+        if (userId == null) {
+            return noop();
+        }
         return (root, query, cb) -> cb.equal(root.get("user").get("id"), userId);
     }
 
@@ -23,6 +26,17 @@ public final class WeeklyReportSpecifications {
         return (root, query, cb) -> {
             if (Long.class != query.getResultType() && long.class != query.getResultType()) {
                 root.fetch("project", JoinType.LEFT);
+            }
+            return cb.conjunction();
+        };
+    }
+
+    // fetch-joins the owner so the manager list can read name/email without a per-row lazy load.
+    // Safe to combine with fetchProject() in the same query -- both are to-one joins, not bags.
+    public static Specification<WeeklyReport> fetchUser() {
+        return (root, query, cb) -> {
+            if (Long.class != query.getResultType() && long.class != query.getResultType()) {
+                root.fetch("user", JoinType.LEFT);
             }
             return cb.conjunction();
         };

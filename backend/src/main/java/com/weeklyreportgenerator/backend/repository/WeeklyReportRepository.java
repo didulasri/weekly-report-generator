@@ -6,6 +6,8 @@ import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 import com.weeklyreportgenerator.backend.entity.WeeklyReport;
 import com.weeklyreportgenerator.backend.entity.enums.ReportStatus;
@@ -24,4 +26,15 @@ public interface WeeklyReportRepository extends JpaRepository<WeeklyReport, Long
 
     boolean existsByUserIdAndProjectIdAndWeekStartDateAndIdNot(
             Long userId, Long projectId, LocalDate weekStartDate, Long id);
+
+    // One grouped query for every team member on the page, instead of one count query per member.
+    @Query("SELECT r.user.id AS userId, r.status AS status, COUNT(r) AS cnt "
+            + "FROM WeeklyReport r WHERE r.user.id IN :userIds GROUP BY r.user.id, r.status")
+    List<ReportStatusCount> countByStatusGroupedByUser(@Param("userIds") List<Long> userIds);
+
+    interface ReportStatusCount {
+        Long getUserId();
+        ReportStatus getStatus();
+        Long getCnt();
+    }
 }

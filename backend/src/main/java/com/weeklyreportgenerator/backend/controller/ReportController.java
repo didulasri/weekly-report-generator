@@ -1,6 +1,7 @@
 package com.weeklyreportgenerator.backend.controller;
 
 import java.time.LocalDate;
+import java.util.List;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -24,6 +25,8 @@ import com.weeklyreportgenerator.backend.dto.request.UpdateReportRequest;
 import com.weeklyreportgenerator.backend.dto.response.PagedResponse;
 import com.weeklyreportgenerator.backend.dto.response.ReportDetailResponse;
 import com.weeklyreportgenerator.backend.dto.response.ReportSummaryResponse;
+import com.weeklyreportgenerator.backend.dto.response.ReportVersionSummaryResponse;
+import com.weeklyreportgenerator.backend.entity.ReportReview;
 import com.weeklyreportgenerator.backend.entity.WeeklyReport;
 import com.weeklyreportgenerator.backend.entity.enums.ReportStatus;
 import com.weeklyreportgenerator.backend.mapper.ReportMapper;
@@ -61,7 +64,8 @@ public class ReportController {
         Page<ReportSummaryResponse> summaries = reports.map(report -> reportMapper.toSummaryResponse(
                 report,
                 reportService.countTasks(report.getId()),
-                reportService.sumWorkHours(report.getId())));
+                reportService.sumWorkHours(report.getId()),
+                reportService.latestReviewComment(report.getId())));
 
         return ResponseEntity.ok(PagedResponse.of(summaries));
     }
@@ -69,7 +73,8 @@ public class ReportController {
     @GetMapping("/{id}")
     public ResponseEntity<ReportDetailResponse> getReport(@PathVariable Long id) {
         WeeklyReport report = reportService.getReport(id);
-        return ResponseEntity.ok(reportMapper.toDetailResponse(report));
+        List<ReportReview> reviews = reportService.getReviewHistory(id);
+        return ResponseEntity.ok(reportMapper.toDetailResponse(report, reviews));
     }
 
     @PutMapping("/{id}")
@@ -83,5 +88,25 @@ public class ReportController {
     public ResponseEntity<Void> deleteReport(@PathVariable Long id) {
         reportService.deleteReport(id);
         return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/{id}/submit")
+    public ResponseEntity<ReportDetailResponse> submitReport(@PathVariable Long id) {
+        WeeklyReport submitted = reportService.submitReport(id);
+        return ResponseEntity.ok(reportMapper.toDetailResponse(submitted));
+    }
+
+    @GetMapping("/{id}/versions")
+    public ResponseEntity<List<ReportVersionSummaryResponse>> listVersions(@PathVariable Long id) {
+        List<ReportVersionSummaryResponse> versions = reportService.listVersions(id).stream()
+                .map(reportMapper::toVersionSummaryResponse)
+                .toList();
+        return ResponseEntity.ok(versions);
+    }
+
+    @GetMapping("/{id}/versions/{versionNumber}")
+    public ResponseEntity<ReportDetailResponse> getVersionSnapshot(
+            @PathVariable Long id, @PathVariable Integer versionNumber) {
+        return ResponseEntity.ok(reportService.getVersionSnapshot(id, versionNumber));
     }
 }

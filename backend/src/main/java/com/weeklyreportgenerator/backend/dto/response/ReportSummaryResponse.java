@@ -23,4 +23,6 @@ public class ReportSummaryResponse {
     private long taskCount;
     private BigDecimal totalHours;
     private Instant updatedAt;
+    private boolean canEdit;
+    private String latestReviewComment;
 }

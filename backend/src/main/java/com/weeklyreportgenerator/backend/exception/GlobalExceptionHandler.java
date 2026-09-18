@@ -59,6 +59,20 @@ public class GlobalExceptionHandler {
         return build(HttpStatus.CONFLICT, "CONFLICT", ex.getMessage(), request);
     }
 
+    @ExceptionHandler(ReportSubmissionValidationException.class)
+    public ResponseEntity<ErrorResponse> handleReportSubmissionValidation(
+            ReportSubmissionValidationException ex, HttpServletRequest request) {
+        ErrorResponse body = ErrorResponse.builder()
+                .timestamp(LocalDateTime.now())
+                .status(HttpStatus.BAD_REQUEST.value())
+                .error("VALIDATION_ERROR")
+                .message(ex.getMessage())
+                .path(request.getRequestURI())
+                .errors(ex.getErrors())
+                .build();
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(body);
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleGeneric(Exception ex, HttpServletRequest request) {
         log.error("Unhandled exception while processing {}", request.getRequestURI(), ex);
