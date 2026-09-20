@@ -427,6 +427,31 @@ Request:
 
     DELETE /api/admin/users/{id}
 
+Soft delete: sets `active = false`. The row, and every report/review/version
+that references this user, is never removed.
+
+---
+
+## Reactivate User
+
+    PATCH /api/admin/users/{id}/activate
+
+Sets `active = true`. Deactivation with no way back would be a dead end.
+
+---
+
+## Reset User Password
+
+    PATCH /api/admin/users/{id}/reset-password
+
+Admin-initiated reset for a locked-out user.
+
+Request:
+
+    {
+      "newPassword": "NewPassword123"
+    }
+
 ---
 
 # 9. Standard HTTP Responses

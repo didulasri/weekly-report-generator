@@ -28,4 +28,21 @@ public interface UserProjectRepository extends JpaRepository<UserProject, Long> 
             WHERE up.project.id = :projectId AND up.active = true
             """)
     List<UserProject> findActiveWithUserByProjectId(@Param("projectId") Long projectId);
+
+    @Query("""
+            SELECT up FROM UserProject up
+            JOIN FETCH up.project
+            WHERE up.user.id = :userId AND up.active = true
+            """)
+    List<UserProject> findActiveWithProjectByUserId(@Param("userId") Long userId);
+
+    // One grouped query for every user on the admin list page, instead of one count per row.
+    @Query("SELECT up.user.id AS userId, COUNT(up) AS cnt "
+            + "FROM UserProject up WHERE up.user.id IN :userIds AND up.active = true GROUP BY up.user.id")
+    List<UserProjectCount> countActiveGroupedByUser(@Param("userIds") List<Long> userIds);
+
+    interface UserProjectCount {
+        Long getUserId();
+        Long getCnt();
+    }
 }
