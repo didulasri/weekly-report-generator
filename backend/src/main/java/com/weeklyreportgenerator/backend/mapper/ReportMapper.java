@@ -56,6 +56,7 @@ public class ReportMapper {
                 .achievements(report.getAchievements().stream().map(this::toAchievementResponse).toList())
                 .workHours(report.getWorkHours().stream().map(this::toWorkHourResponse).toList())
                 .reviews(reviews.stream().map(this::toReviewResponse).toList())
+                .hasUnreadReview(hasUnreadReview(reviews.isEmpty() ? null : reviews.get(0)))
                 .build();
     }
 
@@ -64,7 +65,7 @@ public class ReportMapper {
     }
 
     public ReportSummaryResponse toSummaryResponse(
-            WeeklyReport report, long taskCount, BigDecimal totalHours, String latestReviewComment) {
+            WeeklyReport report, long taskCount, BigDecimal totalHours, ReportReview latestReview) {
         return ReportSummaryResponse.builder()
                 .id(report.getId())
                 .weekStartDate(report.getWeekStartDate())
@@ -75,7 +76,9 @@ public class ReportMapper {
                 .totalHours(totalHours)
                 .updatedAt(report.getUpdatedAt())
                 .canEdit(isEditable(report.getStatus()))
-                .latestReviewComment(latestReviewComment)
+                .latestReviewComment(latestReview != null ? latestReview.getComment() : null)
+                .latestReviewerName(latestReview != null ? latestReview.getReviewer().getName() : null)
+                .hasUnreadReview(hasUnreadReview(latestReview))
                 .build();
     }
 
@@ -83,6 +86,12 @@ public class ReportMapper {
     // here as a read-only projection so the frontend doesn't have to reimplement the status rules.
     private boolean isEditable(ReportStatus status) {
         return status == ReportStatus.DRAFT || status == ReportStatus.NEEDS_CORRECTION;
+    }
+
+    // "Unread" tracks the single most recent review only -- acknowledging it clears the badge even
+    // if older reviews on this report were never explicitly acknowledged.
+    private boolean hasUnreadReview(ReportReview latestReview) {
+        return latestReview != null && latestReview.getAcknowledgedAt() == null;
     }
 
     public ReportVersionSummaryResponse toVersionSummaryResponse(ReportVersion version) {
@@ -114,11 +123,13 @@ public class ReportMapper {
 
     public ReviewResponse toReviewResponse(ReportReview review) {
         return ReviewResponse.builder()
+                .id(review.getId())
                 .action(review.getAction().name())
                 .comment(review.getComment())
                 .versionNumber(review.getVersionNumber())
                 .reviewedAt(review.getReviewedAt())
                 .reviewerName(review.getReviewer().getName())
+                .acknowledged(review.getAcknowledgedAt() != null)
                 .build();
     }
 

@@ -47,4 +47,7 @@ public class ReportReview extends BaseEntity {
 
     @Column(name = "reviewed_at", nullable = false)
     private Instant reviewedAt;
+
+    @Column(name = "acknowledged_at")
+    private Instant acknowledgedAt;
 }

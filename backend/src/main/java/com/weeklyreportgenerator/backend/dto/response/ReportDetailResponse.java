@@ -38,4 +38,5 @@ public class ReportDetailResponse {
     // Newest first. Carries reviewerName only -- never the reviewer's email, so a member can see
     // why their report came back without seeing anything else about the reviewer.
     private List<ReviewResponse> reviews;
+    private boolean hasUnreadReview;
 }

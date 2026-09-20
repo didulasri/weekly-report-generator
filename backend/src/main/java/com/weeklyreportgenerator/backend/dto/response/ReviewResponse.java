@@ -13,9 +13,11 @@ import lombok.NoArgsConstructor;
 @Builder
 public class ReviewResponse {
 
+    private Long id;
     private String action;
     private String comment;
     private Integer versionNumber;
     private Instant reviewedAt;
     private String reviewerName;
+    private boolean acknowledged;
 }

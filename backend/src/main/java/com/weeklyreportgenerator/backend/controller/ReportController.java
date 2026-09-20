@@ -65,7 +65,24 @@ public class ReportController {
                 report,
                 reportService.countTasks(report.getId()),
                 reportService.sumWorkHours(report.getId()),
-                reportService.latestReviewComment(report.getId())));
+                reportService.latestReview(report.getId()).orElse(null)));
+
+        return ResponseEntity.ok(PagedResponse.of(summaries));
+    }
+
+    @GetMapping("/needs-correction")
+    public ResponseEntity<PagedResponse<ReportSummaryResponse>> listNeedsCorrection(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size) {
+
+        Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "updatedAt"));
+        Page<WeeklyReport> reports = reportService.listNeedsCorrectionReports(pageable);
+
+        Page<ReportSummaryResponse> summaries = reports.map(report -> reportMapper.toSummaryResponse(
+                report,
+                reportService.countTasks(report.getId()),
+                reportService.sumWorkHours(report.getId()),
+                reportService.latestReview(report.getId()).orElse(null)));
 
         return ResponseEntity.ok(PagedResponse.of(summaries));
     }
@@ -108,5 +125,11 @@ public class ReportController {
     public ResponseEntity<ReportDetailResponse> getVersionSnapshot(
             @PathVariable Long id, @PathVariable Integer versionNumber) {
         return ResponseEntity.ok(reportService.getVersionSnapshot(id, versionNumber));
+    }
+
+    @PostMapping("/{id}/reviews/{reviewId}/acknowledge")
+    public ResponseEntity<Void> acknowledgeReview(@PathVariable Long id, @PathVariable Long reviewId) {
+        reportService.acknowledgeReview(id, reviewId);
+        return ResponseEntity.noContent().build();
     }
 }

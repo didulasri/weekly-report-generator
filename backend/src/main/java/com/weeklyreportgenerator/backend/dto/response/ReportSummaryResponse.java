@@ -25,4 +25,6 @@ public class ReportSummaryResponse {
     private Instant updatedAt;
     private boolean canEdit;
     private String latestReviewComment;
+    private String latestReviewerName;
+    private boolean hasUnreadReview;
 }

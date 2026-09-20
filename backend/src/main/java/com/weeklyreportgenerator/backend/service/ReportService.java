@@ -2,9 +2,11 @@ package com.weeklyreportgenerator.backend.service;
 
 import java.math.BigDecimal;
 import java.time.DayOfWeek;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 import org.hibernate.Hibernate;
 import org.springframework.data.domain.Page;
@@ -38,6 +40,7 @@ import com.weeklyreportgenerator.backend.entity.enums.ReportStatus;
 import com.weeklyreportgenerator.backend.entity.enums.RoleName;
 import com.weeklyreportgenerator.backend.exception.DuplicateResourceException;
 import com.weeklyreportgenerator.backend.exception.InvalidRequestException;
+import com.weeklyreportgenerator.backend.exception.InvalidStatusTransitionException;
 import com.weeklyreportgenerator.backend.exception.ReportSubmissionValidationException;
 import com.weeklyreportgenerator.backend.exception.ResourceNotFoundException;
 import com.weeklyreportgenerator.backend.repository.ProjectRepository;
@@ -107,6 +110,7 @@ public class ReportService {
                 .orElseThrow(() -> new ResourceNotFoundException("Report not found: " + id));
 
         reportWorkflowService.assertEditable(report);
+        assertIdentityUnchangedOnceSubmitted(report, request);
 
         validateWeekDates(request.getWeekStartDate(), request.getWeekEndDate());
         Project project = getActiveProjectOrThrow(request.getProjectId());
@@ -153,11 +157,45 @@ public class ReportService {
         return reportReviewRepository.findByReportIdOrderByReviewedAtDesc(reportId);
     }
 
+    // Idempotent by design -- acknowledging an already-acknowledged review is a no-op, not an error.
+    @Transactional
+    public void acknowledgeReview(Long reportId, Long reviewId) {
+        Long userId = SecurityUtils.getCurrentUserId();
+        WeeklyReport report = weeklyReportRepository.findByIdAndUserId(reportId, userId)
+                .orElseThrow(() -> new ResourceNotFoundException("Report not found: " + reportId));
+
+        ReportReview review = reportReviewRepository.findById(reviewId)
+                .filter(r -> r.getReport().getId().equals(report.getId()))
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Review " + reviewId + " not found for report " + reportId));
+
+        if (review.getAcknowledgedAt() == null) {
+            review.setAcknowledgedAt(Instant.now());
+            reportReviewRepository.save(review);
+        }
+    }
+
+    // Reuses the reviewer-fetch-joined query so callers can safely read reviewer.getName()
+    // outside this method's transaction, same as getReviewHistory.
     @Transactional(readOnly = true)
-    public String latestReviewComment(Long reportId) {
-        return reportReviewRepository.findFirstByReportIdOrderByReviewedAtDesc(reportId)
-                .map(ReportReview::getComment)
-                .orElse(null);
+    public Optional<ReportReview> latestReview(Long reportId) {
+        return reportReviewRepository.findByReportIdOrderByReviewedAtDesc(reportId).stream().findFirst();
+    }
+
+    // Owner-scoped correction queue: reuses the existing hasUserId/hasStatus/fetchProject
+    // specifications rather than a new query builder. Sort is applied by the caller's Pageable --
+    // ordering by updatedAt DESC works because entering NEEDS_CORRECTION always comes from a
+    // manager's review save, which bumps the report's @LastModifiedDate at that exact moment.
+    @Transactional(readOnly = true)
+    public Page<WeeklyReport> listNeedsCorrectionReports(Pageable pageable) {
+        Long userId = SecurityUtils.getCurrentUserId();
+
+        Specification<WeeklyReport> spec = Specification
+                .where(WeeklyReportSpecifications.hasUserId(userId))
+                .and(WeeklyReportSpecifications.hasStatus(ReportStatus.NEEDS_CORRECTION))
+                .and(WeeklyReportSpecifications.fetchProject());
+
+        return weeklyReportRepository.findAll(spec, pageable);
     }
 
     // Hibernate can't join-fetch multiple List collections in one query (MultipleBagFetchException),
@@ -225,6 +263,7 @@ public class ReportService {
         validateCompleteness(report);
 
         if (previousStatus == ReportStatus.NEEDS_CORRECTION) {
+            assertContentChangedSinceLastSubmission(report);
             report.setCurrentVersion(report.getCurrentVersion() + 1);
         }
 
@@ -237,6 +276,21 @@ public class ReportService {
         report.addVersion(version);
 
         return weeklyReportRepository.save(report);
+    }
+
+    // Only applied when the previous status was NEEDS_CORRECTION -- first submissions have no prior
+    // version to compare against and are unaffected. Compares against the snapshot for the version
+    // still in effect (report.getCurrentVersion() has not been incremented yet at this point).
+    private void assertContentChangedSinceLastSubmission(WeeklyReport report) {
+        ReportVersion lastVersion = reportVersionRepository
+                .findByReportIdAndVersionNumber(report.getId(), report.getCurrentVersion())
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Version " + report.getCurrentVersion() + " not found for report " + report.getId()));
+
+        if (reportSnapshotService.contentUnchangedSince(report, lastVersion.getSnapshotData())) {
+            throw new InvalidStatusTransitionException(
+                    "No changes were made since the manager's feedback -- edit the report before resubmitting");
+        }
     }
 
     // MANAGER/ADMIN can read any report's versions; TEAM_MEMBER only their own. See canAccessReport --
@@ -335,6 +389,27 @@ public class ReportService {
 
         if (!errors.isEmpty()) {
             throw new ReportSubmissionValidationException(errors);
+        }
+    }
+
+    // Once a report has been submitted at least once (currentVersion > 1, or status is
+    // NEEDS_CORRECTION -- the first correction round is still version 1), the manager's review
+    // history refers to "week X on project Y". Moving it to a different week/project would
+    // silently invalidate that history, so project and week dates are locked from here on.
+    private void assertIdentityUnchangedOnceSubmitted(WeeklyReport report, UpdateReportRequest request) {
+        boolean locked = report.getCurrentVersion() > 1 || report.getStatus() == ReportStatus.NEEDS_CORRECTION;
+        if (!locked) {
+            return;
+        }
+
+        boolean projectChanged = !report.getProject().getId().equals(request.getProjectId());
+        boolean weekChanged = !report.getWeekStartDate().equals(request.getWeekStartDate())
+                || !report.getWeekEndDate().equals(request.getWeekEndDate());
+
+        if (projectChanged || weekChanged) {
+            throw new InvalidStatusTransitionException(
+                    "Project and week dates cannot be changed once a report has been submitted -- "
+                            + "the manager's review history refers to this report's original project and week");
         }
     }
 
