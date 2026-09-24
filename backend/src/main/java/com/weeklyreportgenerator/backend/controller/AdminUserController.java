@@ -10,7 +10,6 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -18,8 +17,6 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.weeklyreportgenerator.backend.dto.request.CreateUserRequest;
-import com.weeklyreportgenerator.backend.dto.request.ResetPasswordRequest;
 import com.weeklyreportgenerator.backend.dto.request.UpdateRoleRequest;
 import com.weeklyreportgenerator.backend.dto.request.UpdateUserRequest;
 import com.weeklyreportgenerator.backend.dto.response.PagedResponse;
@@ -31,6 +28,9 @@ import com.weeklyreportgenerator.backend.service.AdminUserService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 
+// Account creation moved to the invitation flow (POST /api/admin/invitations) -- no endpoint here
+// lets an admin set or see a password. Password reset moved to
+// POST /api/admin/users/{id}/send-password-reset, which only ever triggers an email.
 @RestController
 @RequestMapping("/api/admin/users")
 @RequiredArgsConstructor
@@ -56,12 +56,6 @@ public class AdminUserController {
         return ResponseEntity.ok(adminUserService.getUserDetail(id));
     }
 
-    @PostMapping
-    @ResponseStatus(HttpStatus.CREATED)
-    public UserResponse createUser(@Valid @RequestBody CreateUserRequest request) {
-        return adminUserService.createUser(request);
-    }
-
     @PutMapping("/{id}")
     public ResponseEntity<UserResponse> updateUser(@PathVariable Long id, @Valid @RequestBody UpdateUserRequest request) {
         return ResponseEntity.ok(adminUserService.updateUser(id, request));
@@ -81,11 +75,5 @@ public class AdminUserController {
     @PatchMapping("/{id}/activate")
     public ResponseEntity<UserResponse> activateUser(@PathVariable Long id) {
         return ResponseEntity.ok(adminUserService.activateUser(id));
-    }
-
-    @PatchMapping("/{id}/reset-password")
-    @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void resetPassword(@PathVariable Long id, @Valid @RequestBody ResetPasswordRequest request) {
-        adminUserService.resetPassword(id, request.getNewPassword());
     }
 }

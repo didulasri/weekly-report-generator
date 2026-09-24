@@ -1,6 +1,5 @@
 package com.weeklyreportgenerator.backend.controller;
 
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -10,7 +9,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.weeklyreportgenerator.backend.dto.request.LoginRequest;
-import com.weeklyreportgenerator.backend.dto.request.RegisterRequest;
 import com.weeklyreportgenerator.backend.dto.response.AuthResponse;
 import com.weeklyreportgenerator.backend.dto.response.UserSummaryResponse;
 import com.weeklyreportgenerator.backend.security.CustomUserDetails;
@@ -25,12 +23,6 @@ import lombok.RequiredArgsConstructor;
 public class AuthController {
 
     private final AuthService authService;
-
-    @PostMapping("/register")
-    public ResponseEntity<Void> register(@Valid @RequestBody RegisterRequest request) {
-        authService.register(request);
-        return ResponseEntity.status(HttpStatus.CREATED).build();
-    }
 
     @PostMapping("/login")
     public ResponseEntity<AuthResponse> login(@Valid @RequestBody LoginRequest request) {

@@ -17,6 +17,10 @@ spring:
 
   flyway:
     enabled: true
+    # Schema + core reference data only. Demo accounts with known passwords live in
+    # classpath:db/seed, added on top of this list only by the dev profile -- see
+    # application-dev.yml. A production deployment must run with a non-dev profile so it never
+    # applies those seed migrations.
     locations: classpath:db/migration
 
 app:

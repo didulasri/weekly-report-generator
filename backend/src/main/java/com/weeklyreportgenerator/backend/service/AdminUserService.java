@@ -8,11 +8,9 @@ import java.util.stream.Collectors;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import com.weeklyreportgenerator.backend.dto.request.CreateUserRequest;
 import com.weeklyreportgenerator.backend.dto.request.UpdateUserRequest;
 import com.weeklyreportgenerator.backend.dto.response.AdminUserProjectResponse;
 import com.weeklyreportgenerator.backend.dto.response.ReportStatusBreakdown;
@@ -42,7 +40,6 @@ public class AdminUserService {
     private final UserProjectRepository userProjectRepository;
     private final WeeklyReportRepository weeklyReportRepository;
     private final RoleRepository roleRepository;
-    private final PasswordEncoder passwordEncoder;
 
     @PreAuthorize("hasRole('ADMIN')")
     @Transactional(readOnly = true)
@@ -58,29 +55,6 @@ public class AdminUserService {
 
         return users.map(user -> toResponse(user, projectCounts.getOrDefault(user.getId(), 0L),
                 reportCounts.getOrDefault(user.getId(), 0L)));
-    }
-
-    @PreAuthorize("hasRole('ADMIN')")
-    @Transactional
-    public UserResponse createUser(CreateUserRequest request) {
-        if (userRepository.existsByEmailIgnoreCase(request.getEmail())) {
-            throw new DuplicateResourceException("An account with this email already exists");
-        }
-
-        Role role = roleRepository.findByName(request.getRole())
-                .orElseThrow(() -> new IllegalStateException(request.getRole() + " role is not seeded"));
-
-        User user = User.builder()
-                .name(request.getName())
-                .email(request.getEmail())
-                .password(passwordEncoder.encode(request.getPassword()))
-                .role(role)
-                .active(true)
-                .build();
-
-        user = userRepository.save(user);
-        // A newly created account has no assignments or reports yet -- no need to query for zeros.
-        return toResponse(user, 0L, 0L);
     }
 
     @PreAuthorize("hasRole('ADMIN')")
@@ -181,14 +155,6 @@ public class AdminUserService {
         long reportCount = weeklyReportRepository.countByStatusGroupedByUser(List.of(id)).stream()
                 .mapToLong(ReportStatusCount::getCnt).sum();
         return toResponse(user, projectCount, reportCount);
-    }
-
-    @PreAuthorize("hasRole('ADMIN')")
-    @Transactional
-    public void resetPassword(Long id, String newPassword) {
-        User user = getUserOrThrow(id);
-        user.setPassword(passwordEncoder.encode(newPassword));
-        userRepository.save(user);
     }
 
     // Self-protection guards -- kept together here rather than scattered across endpoints, since

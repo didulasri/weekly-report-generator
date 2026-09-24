@@ -11,16 +11,22 @@ import java.util.UUID;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
+// There is no public registration any more -- accounts exist only through the admin invitation
+// flow (see InvitationIntegrationTest) or the bootstrap admin. Fixture accounts here are created
+// with a direct JDBC insert as a stand-in for "an account exists", since this file's job is to
+// test login/me, not account creation.
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.MOCK)
 @AutoConfigureMockMvc
 @Testcontainers
@@ -34,20 +40,14 @@ class AuthIntegrationTest {
     @Autowired
     private MockMvc mockMvc;
 
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private PasswordEncoder passwordEncoder;
+
     private String uniqueEmail(String prefix) {
         return prefix + "-" + UUID.randomUUID() + "@example.com";
-    }
-
-    private String registerBody(String name, String email, String password) {
-        return """
-                {"name":"%s","email":"%s","password":"%s"}
-                """.formatted(name, email, password);
-    }
-
-    private String registerBodyWithRole(String name, String email, String password, String role) {
-        return """
-                {"name":"%s","email":"%s","password":"%s","role":"%s"}
-                """.formatted(name, email, password, role);
     }
 
     private String loginBody(String email, String password) {
@@ -56,11 +56,13 @@ class AuthIntegrationTest {
                 """.formatted(email, password);
     }
 
-    private String register(String name, String email, String password) throws Exception {
-        mockMvc.perform(post("/api/auth/register")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(registerBody(name, email, password)))
-                .andExpect(status().isCreated());
+    private String createActiveTeamMember(String name, String email, String password) {
+        Long roleId = jdbcTemplate.queryForObject(
+                "SELECT id FROM roles WHERE name = 'TEAM_MEMBER'", Long.class);
+        jdbcTemplate.update("""
+                INSERT INTO users (name, email, password, role_id, active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, true, now(), now())
+                """, name, email, passwordEncoder.encode(password), roleId);
         return email;
     }
 
@@ -79,32 +81,9 @@ class AuthIntegrationTest {
     }
 
     @Test
-    void registerSucceedsAndReturns201() throws Exception {
-        String email = uniqueEmail("register-ok");
-
-        mockMvc.perform(post("/api/auth/register")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(registerBody("New User", email, "Password123")))
-                .andExpect(status().isCreated());
-    }
-
-    @Test
-    void duplicateEmailReturns409() throws Exception {
-        String email = uniqueEmail("duplicate");
-        register("First User", email, "Password123");
-
-        mockMvc.perform(post("/api/auth/register")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(registerBody("Second User", email, "Password123")))
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.status", is(409)))
-                .andExpect(jsonPath("$.error", is("CONFLICT")));
-    }
-
-    @Test
     void loginWithCorrectCredentialsReturnsToken() throws Exception {
         String email = uniqueEmail("login-ok");
-        register("Login User", email, "Password123");
+        createActiveTeamMember("Login User", email, "Password123");
 
         mockMvc.perform(post("/api/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -119,7 +98,7 @@ class AuthIntegrationTest {
     @Test
     void loginWithWrongPasswordReturns401() throws Exception {
         String email = uniqueEmail("login-wrong-pw");
-        register("Login User", email, "Password123");
+        createActiveTeamMember("Login User", email, "Password123");
 
         mockMvc.perform(post("/api/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -139,7 +118,7 @@ class AuthIntegrationTest {
     @Test
     void meWithValidTokenReturnsCorrectUser() throws Exception {
         String email = uniqueEmail("me-ok");
-        register("Me User", email, "Password123");
+        createActiveTeamMember("Me User", email, "Password123");
         String token = loginAndGetToken(email, "Password123");
 
         mockMvc.perform(get("/api/auth/me").header("Authorization", "Bearer " + token))
@@ -149,25 +128,9 @@ class AuthIntegrationTest {
     }
 
     @Test
-    void registeredUserIsAlwaysTeamMemberEvenIfRoleFieldIsSent() throws Exception {
-        String email = uniqueEmail("sneaky-role");
-
-        mockMvc.perform(post("/api/auth/register")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(registerBodyWithRole("Sneaky User", email, "Password123", "ADMIN")))
-                .andExpect(status().isCreated());
-
-        String token = loginAndGetToken(email, "Password123");
-
-        mockMvc.perform(get("/api/auth/me").header("Authorization", "Bearer " + token))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.role", is("TEAM_MEMBER")));
-    }
-
-    @Test
     void teamMemberTokenIsForbiddenOnManagerOnlyRoute() throws Exception {
         String email = uniqueEmail("rbac-member");
-        register("RBAC Member", email, "Password123");
+        createActiveTeamMember("RBAC Member", email, "Password123");
         String token = loginAndGetToken(email, "Password123");
 
         mockMvc.perform(get("/api/test/manager-only").header("Authorization", "Bearer " + token))

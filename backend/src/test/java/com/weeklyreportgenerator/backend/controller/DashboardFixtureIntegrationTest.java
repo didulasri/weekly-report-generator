@@ -20,6 +20,7 @@ import org.springframework.boot.testcontainers.service.connection.ServiceConnect
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -35,9 +36,12 @@ import tools.jackson.databind.json.JsonMapper;
 // One deterministic fixture (2 fresh projects, 5 fresh members, 4 reports covering all four
 // statuses, known task/work-hour/blocker counts) backs every numeric assertion in this class, so
 // every count below is a fact this test controls, not an assumption about pre-existing seed data.
+// "dev" must stay active alongside "test" here -- it's what puts classpath:db/seed (V14-V16,
+// including manager@example.com) on the Flyway locations list; "test" alone only adds Hibernate
+// statistics config and would silently lose the seed data this fixture's managerToken() needs.
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.MOCK)
 @AutoConfigureMockMvc
-@ActiveProfiles("test")
+@ActiveProfiles({"dev", "test"})
 @Testcontainers
 class DashboardFixtureIntegrationTest {
 
@@ -51,6 +55,9 @@ class DashboardFixtureIntegrationTest {
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private PasswordEncoder passwordEncoder;
 
     @Autowired
     private EntityManagerFactory entityManagerFactory;
@@ -98,13 +105,16 @@ class DashboardFixtureIntegrationTest {
         return loginAndGetToken("manager@example.com", "Password123");
     }
 
+    // There is no public registration any more -- accounts exist only through the admin
+    // invitation flow. This fixture only needs "an active team-member account exists", so a
+    // direct JDBC insert stands in for it rather than pulling in the invitation flow here.
     private void register(String name, String email) throws Exception {
-        mockMvc.perform(post("/api/auth/register")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {"name":"%s","email":"%s","password":"Fixture123"}
-                                """.formatted(name, email)))
-                .andExpect(status().isCreated());
+        Long roleId = jdbcTemplate.queryForObject(
+                "SELECT id FROM roles WHERE name = 'TEAM_MEMBER'", Long.class);
+        jdbcTemplate.update("""
+                INSERT INTO users (name, email, password, role_id, active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, true, now(), now())
+                """, name, email, passwordEncoder.encode("Fixture123"), roleId);
     }
 
     private Long createProject(String managerToken, String name) throws Exception {

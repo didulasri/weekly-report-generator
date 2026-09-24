@@ -18,6 +18,7 @@ import org.springframework.boot.testcontainers.service.connection.ServiceConnect
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -42,6 +43,9 @@ class AdminUserIntegrationTest {
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private PasswordEncoder passwordEncoder;
 
     private static final AtomicInteger COUNTER = new AtomicInteger(0);
 
@@ -87,18 +91,18 @@ class AdminUserIntegrationTest {
         return prefix + "-" + COUNTER.incrementAndGet() + "-" + System.nanoTime() + "@example.com";
     }
 
-    private Long createUser(String adminToken, String name, String email, String role) throws Exception {
-        String response = mockMvc.perform(post("/api/admin/users")
-                        .header("Authorization", "Bearer " + adminToken)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {"name":"%s","email":"%s","password":"Password123","role":"%s"}
-                                """.formatted(name, email, role)))
-                .andExpect(status().isCreated())
-                .andReturn()
-                .getResponse()
-                .getContentAsString();
-        return Long.valueOf(extractJsonValue(response, "\"id\":", false));
+    // Account creation moved to the invitation flow -- POST /api/admin/users no longer exists.
+    // This helper stands in for "an active account with this role exists" via a direct insert, the
+    // same bridge used in AuthIntegrationTest and DashboardFixtureIntegrationTest. The adminToken
+    // parameter is kept (unused) so every existing call site in this file needed no other change.
+    private Long createUser(String adminToken, String name, String email, String role) {
+        Long roleId = jdbcTemplate.queryForObject(
+                "SELECT id FROM roles WHERE name = ?", Long.class, role);
+        return jdbcTemplate.queryForObject("""
+                INSERT INTO users (name, email, password, role_id, active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, true, now(), now())
+                RETURNING id
+                """, Long.class, name, email, passwordEncoder.encode("Password123"), roleId);
     }
 
     // ---- Role enforcement ----
@@ -112,10 +116,6 @@ class AdminUserIntegrationTest {
             mockMvc.perform(get(url).header("Authorization", "Bearer " + token))
                     .andExpect(status().isForbidden());
         }
-        mockMvc.perform(post("/api/admin/users").header("Authorization", "Bearer " + token)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"name\":\"X\",\"email\":\"x@example.com\",\"password\":\"Password123\",\"role\":\"TEAM_MEMBER\"}"))
-                .andExpect(status().isForbidden());
         mockMvc.perform(put("/api/admin/users/1").header("Authorization", "Bearer " + token)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"name\":\"X\",\"email\":\"x@example.com\"}"))
@@ -128,10 +128,6 @@ class AdminUserIntegrationTest {
                 .andExpect(status().isForbidden());
         mockMvc.perform(patch("/api/admin/users/1/activate").header("Authorization", "Bearer " + token))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(patch("/api/admin/users/1/reset-password").header("Authorization", "Bearer " + token)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"newPassword\":\"Password123\"}"))
-                .andExpect(status().isForbidden());
     }
 
     @Test
@@ -141,9 +137,9 @@ class AdminUserIntegrationTest {
             mockMvc.perform(get(url).header("Authorization", "Bearer " + token))
                     .andExpect(status().isForbidden());
         }
-        mockMvc.perform(post("/api/admin/users").header("Authorization", "Bearer " + token)
+        mockMvc.perform(put("/api/admin/users/1").header("Authorization", "Bearer " + token)
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"name\":\"X\",\"email\":\"x@example.com\",\"password\":\"Password123\",\"role\":\"TEAM_MEMBER\"}"))
+                        .content("{\"name\":\"X\",\"email\":\"x@example.com\"}"))
                 .andExpect(status().isForbidden());
     }
 
@@ -152,9 +148,9 @@ class AdminUserIntegrationTest {
         for (String url : GET_ENDPOINTS) {
             mockMvc.perform(get(url)).andExpect(status().isUnauthorized());
         }
-        mockMvc.perform(post("/api/admin/users")
+        mockMvc.perform(put("/api/admin/users/1")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"name\":\"X\",\"email\":\"x@example.com\",\"password\":\"Password123\",\"role\":\"TEAM_MEMBER\"}"))
+                        .content("{\"name\":\"X\",\"email\":\"x@example.com\"}"))
                 .andExpect(status().isUnauthorized());
     }
 
@@ -240,67 +236,21 @@ class AdminUserIntegrationTest {
     }
 
     // ---- Behaviour ----
-
-    @Test
-    void creatingUserWithDuplicateEmailReturnsConflict() throws Exception {
-        String adminToken = adminToken();
-        String email = uniqueEmail("dup");
-        createUser(adminToken, "First", email, "TEAM_MEMBER");
-
-        mockMvc.perform(post("/api/admin/users")
-                        .header("Authorization", "Bearer " + adminToken)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {"name":"Second","email":"%s","password":"Password123","role":"TEAM_MEMBER"}
-                                """.formatted(email)))
-                .andExpect(status().isConflict());
-    }
-
-    @Test
-    void creatingUserWithInvalidRoleReturnsBadRequest() throws Exception {
-        String adminToken = adminToken();
-        mockMvc.perform(post("/api/admin/users")
-                        .header("Authorization", "Bearer " + adminToken)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {"name":"Bad Role","email":"%s","password":"Password123","role":"SUPERADMIN"}
-                                """.formatted(uniqueEmail("badrole"))))
-                .andExpect(status().isBadRequest());
-    }
-
-    @Test
-    void createdPasswordIsBcryptHashedNotPlaintextInDatabase() throws Exception {
-        String adminToken = adminToken();
-        String email = uniqueEmail("hash-check");
-        createUser(adminToken, "Hash Check", email, "TEAM_MEMBER");
-
-        String storedHash = jdbcTemplate.queryForObject(
-                "SELECT password FROM users WHERE email = ?", String.class, email);
-
-        assertThat(storedHash).isNotEqualTo("Password123");
-        assertThat(storedHash).startsWith("$2");
-    }
+    // Creation-specific behaviour (duplicate email, invalid role, BCrypt hashing on create) moved
+    // to InvitationIntegrationTest, since POST /api/admin/users no longer exists -- account
+    // creation is invitation-only.
 
     @Test
     void noResponseBodyContainsAPasswordField() throws Exception {
         String adminToken = adminToken();
         String email = uniqueEmail("no-echo");
-        String createResponse = mockMvc.perform(post("/api/admin/users")
-                        .header("Authorization", "Bearer " + adminToken)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {"name":"No Echo","email":"%s","password":"Password123","role":"TEAM_MEMBER"}
-                                """.formatted(email)))
-                .andExpect(status().isCreated())
-                .andReturn().getResponse().getContentAsString();
-        assertThat(createResponse.toLowerCase()).doesNotContain("\"password\"");
+        Long id = createUser(adminToken, "No Echo", email, "TEAM_MEMBER");
 
         String listResponse = mockMvc.perform(get("/api/admin/users?search=" + email)
                         .header("Authorization", "Bearer " + adminToken))
                 .andReturn().getResponse().getContentAsString();
         assertThat(listResponse.toLowerCase()).doesNotContain("\"password\"");
 
-        Long id = Long.valueOf(extractJsonValue(createResponse, "\"id\":", false));
         String detailResponse = mockMvc.perform(get("/api/admin/users/" + id)
                         .header("Authorization", "Bearer " + adminToken))
                 .andReturn().getResponse().getContentAsString();
@@ -414,27 +364,9 @@ class AdminUserIntegrationTest {
                 .andExpect(status().isOk());
     }
 
-    @Test
-    void adminPasswordResetLetsUserLoginWithNewPassword() throws Exception {
-        String adminToken = adminToken();
-        String email = uniqueEmail("reset-pw");
-        Long id = createUser(adminToken, "Reset PW", email, "TEAM_MEMBER");
-
-        mockMvc.perform(patch("/api/admin/users/" + id + "/reset-password")
-                        .header("Authorization", "Bearer " + adminToken)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"newPassword\":\"BrandNew456\"}"))
-                .andExpect(status().isNoContent());
-
-        mockMvc.perform(post("/api/auth/login")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"email\":\"%s\",\"password\":\"Password123\"}".formatted(email)))
-                .andExpect(status().isUnauthorized());
-        mockMvc.perform(post("/api/auth/login")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"email\":\"%s\",\"password\":\"BrandNew456\"}".formatted(email)))
-                .andExpect(status().isOk());
-    }
+    // adminPasswordResetLetsUserLoginWithNewPassword moved to the password-reset checkpoint --
+    // PATCH /api/admin/users/{id}/reset-password no longer exists, replaced by
+    // POST /api/admin/users/{id}/send-password-reset (an email-triggering flow, not a direct set).
 
     @Test
     void userListSearchAndRoleFiltersReturnTheRightSubsets() throws Exception {

@@ -4,6 +4,10 @@ spring:
     properties:
       hibernate:
         format_sql: true
+  flyway:
+    # Profile-specific properties replace the base list rather than merging with it, so the full
+    # location list is repeated here, not just the addition.
+    locations: classpath:db/migration,classpath:db/seed
 
 logging:
   level:

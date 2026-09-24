@@ -1,11 +1,9 @@
--- Seed data for local development and demo purposes.
+-- Seed data for local development and demo purposes ONLY -- loaded from db/seed, which is only
+-- on the Flyway classpath in the dev profile (see application-dev.yml). Production never applies
+-- this file, so it never contains these known passwords.
 -- All seeded users share the password "Password123!" (BCrypt-hashed below).
 -- See backend/README.md for the full credential list.
-
-INSERT INTO roles (name, description, created_at, updated_at) VALUES
-    ('TEAM_MEMBER', 'Regular team member who submits weekly reports', now(), now()),
-    ('MANAGER', 'Reviews and approves weekly reports', now(), now()),
-    ('ADMIN', 'Manages users and roles', now(), now());
+-- Roles are seeded separately by V13_1__seed_roles.sql, which always applies.
 
 DO $$
 DECLARE

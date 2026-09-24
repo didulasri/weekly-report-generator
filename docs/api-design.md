@@ -26,21 +26,18 @@ For this assignment, `/api` is sufficient.
 
 # 2. Authentication APIs
 
-## Register
+## No public registration
 
-    POST /api/auth/register
+There is no `POST /api/auth/register` and no other way for an anonymous
+visitor to create an account. Accounts exist only through an admin
+invitation (see the Invitations section) or the one-time bootstrap admin
+created at startup from `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD`.
 
-Purpose: Create a new user account.
-
-Request:
-
-    {
-      "name": "John Doe",
-      "email": "john@example.com",
-      "password": "Password123"
-    }
-
-Response: 201 Created.
+Rationale: this is an internal team-reporting tool, not a public product --
+open registration only creates attack surface (fake accounts, spam,
+enumeration) with no corresponding benefit. Admin-issued invitations keep
+account creation auditable (`invited_by`) and let the admin set the role
+correctly from the start instead of trusting a self-reported one.
 
 ---
 
@@ -405,9 +402,8 @@ Admin endpoints.
 
     GET /api/admin/users/{id}
 
-## Create User
-
-    POST /api/admin/users
+No `POST /api/admin/users`: account creation is invitation-only (see the
+Invitations section). An admin never sets or sees a user's password.
 
 ## Update User
 
@@ -440,17 +436,14 @@ Sets `active = true`. Deactivation with no way back would be a dead end.
 
 ---
 
-## Reset User Password
+## Trigger Password Reset
 
-    PATCH /api/admin/users/{id}/reset-password
+    POST /api/admin/users/{id}/send-password-reset
 
-Admin-initiated reset for a locked-out user.
-
-Request:
-
-    {
-      "newPassword": "NewPassword123"
-    }
+Admin-initiated reset for a locked-out user. Sends the same reset-password
+email as the self-service `/api/auth/forgot-password` flow -- the admin
+never sets or sees the new password themselves. See the Password Reset
+section.
 
 ---
 
