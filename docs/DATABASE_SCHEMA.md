@@ -67,6 +67,7 @@ Define these as Java enums in `entity.enums`. In PostgreSQL they are stored as `
 | `BlockerStatus` | `OPEN`, `RESOLVED`                                                         |
 | `ReviewAction`  | `APPROVED`, `REQUEST_CHANGES`                                              |
 | `WorkCategory`  | `DEVELOPMENT`, `TESTING`, `MEETINGS`, `DOCUMENTATION`, `RESEARCH`, `OTHER` |
+| `InvitationStatus` | `PENDING`, `ACCEPTED`, `EXPIRED`, `REVOKED`                            |
 
 ---
 
@@ -100,6 +101,8 @@ Lookup table for system roles. Seeded once, never edited through the UI.
 | `password`   | VARCHAR(255) | NOT NULL, BCrypt hash      |
 | `role_id`    | BIGINT       | NOT NULL, FK → `roles(id)` |
 | `active`     | BOOLEAN      | NOT NULL, DEFAULT TRUE     |
+| `failed_login_attempts` | INT | NOT NULL, DEFAULT 0 -- added `V22__add_login_lockout.sql` |
+| `locked_until` | TIMESTAMP  | NULL -- added `V22__add_login_lockout.sql`                |
 | `created_at` | TIMESTAMP    | NOT NULL                   |
 | `updated_at` | TIMESTAMP    | NOT NULL                   |
 
@@ -108,6 +111,8 @@ Lookup table for system roles. Seeded once, never edited through the UI.
 - `@ManyToOne(fetch = LAZY) @JoinColumn(name = "role_id")` → `Role role`
 - `password` must be annotated `@JsonIgnore` and never appear in any DTO.
 - The entity itself should **not** implement `UserDetails`. Create a separate `CustomUserDetails` wrapper in the security package.
+- `failed_login_attempts` / `locked_until` back `LoginAttemptService` (per-account lockout, checked
+  before every login attempt). Reset to `0` / `NULL` on a successful login.
 
 **Indexes:** `idx_users_email` on `email`, `idx_users_role_id` on `role_id`.
 
@@ -117,6 +122,9 @@ Lookup table for system roles. Seeded once, never edited through the UI.
 - `User 1 ──< UserProject`
 - `User 1 ──< WeeklyReport` (as owner)
 - `User 1 ──< ReportReview` (as reviewer)
+- `User 1 ──< Invitation` (as `invited_by`)
+- `User 1 ──< PasswordResetToken`
+- `User 1 ──< RefreshToken`
 
 ---
 
@@ -344,6 +352,85 @@ private String snapshotData;
 
 ---
 
+### 3.13 `invitations` (added `V19__create_invitations.sql`)
+
+The only way an account can be created (besides the one-time bootstrap admin). Not a `BaseEntity` subclass in one respect only -- see JPA notes.
+
+| Column        | Type         | Constraints                              |
+| ------------- | ------------ | ----------------------------------------- |
+| `id`          | BIGINT       | PK, identity                               |
+| `email`       | VARCHAR(150) | NOT NULL                                   |
+| `role_id`     | BIGINT       | NOT NULL, FK → `roles(id)`                 |
+| `token_hash`  | VARCHAR(64)  | NOT NULL, UNIQUE -- SHA-256 hex of the raw token |
+| `status`      | VARCHAR(30)  | NOT NULL, DEFAULT `'PENDING'` -- `InvitationStatus` |
+| `expires_at`  | TIMESTAMP    | NOT NULL -- 48h from creation/resend       |
+| `invited_by`  | BIGINT       | NOT NULL, FK → `users(id)`                 |
+| `accepted_at` | TIMESTAMP    | NULL                                       |
+| `created_at`  | TIMESTAMP    | NOT NULL                                   |
+| `updated_at`  | TIMESTAMP    | NOT NULL                                   |
+
+**JPA notes:** the raw token is never persisted -- only its SHA-256 hash (`SecureTokenService`), so
+even full DB access doesn't hand out working invitation links. `resend` rotates `token_hash` and
+`expires_at` in place rather than creating a new row, which invalidates the previous link
+immediately. A pessimistic write lock (`findByTokenHashForUpdate`) guards `acceptInvitation` against
+a concurrent double-accept race.
+
+**Indexes:** unique on `token_hash`; index on `(email, status)` for the duplicate-pending-invite
+check; index on `status` for the daily expiry sweep.
+
+---
+
+### 3.14 `password_reset_tokens` (added `V20__create_password_reset_tokens.sql`)
+
+| Column       | Type        | Constraints                                       |
+| ------------ | ----------- | -------------------------------------------------- |
+| `id`         | BIGINT      | PK, identity                                        |
+| `user_id`    | BIGINT      | NOT NULL, FK → `users(id)`                          |
+| `token_hash` | VARCHAR(64) | NOT NULL, UNIQUE -- SHA-256 hex of the raw token     |
+| `expires_at` | TIMESTAMP   | NOT NULL -- 30 min from creation                    |
+| `used_at`    | TIMESTAMP   | NULL                                                 |
+| `created_at` | TIMESTAMP   | NOT NULL                                             |
+
+No `updated_at` -- a reset token is write-once (`used_at` is the only mutation, and it's set exactly
+once). Requesting a new reset invalidates every prior unused token for that user
+(`invalidateUnusedForUser`). A successful reset revokes every `refresh_tokens` row for that user in
+the same transaction -- see 3.15.
+
+**Index:** unique on `token_hash`.
+
+---
+
+### 3.15 `refresh_tokens` (added `V21__create_refresh_tokens.sql`)
+
+Backs cookie-based auth + rotation. The `access_token` cookie (a short-lived JWT) is never persisted
+anywhere; only the refresh token has server-side state, since only it needs to be revocable.
+
+| Column          | Type         | Constraints                                          |
+| --------------- | ------------ | ------------------------------------------------------ |
+| `id`            | BIGINT       | PK, identity                                            |
+| `user_id`       | BIGINT       | NOT NULL, FK → `users(id)`                              |
+| `token_hash`    | VARCHAR(64)  | NOT NULL, UNIQUE -- SHA-256 hex of the raw token         |
+| `family_id`     | UUID         | NOT NULL                                                |
+| `expires_at`    | TIMESTAMP    | NOT NULL -- 7 days from issue                            |
+| `revoked_at`    | TIMESTAMP    | NULL                                                     |
+| `replaced_by_id`| BIGINT       | NULL, FK → `refresh_tokens(id)`                          |
+| `created_at`    | TIMESTAMP    | NOT NULL                                                 |
+| `user_agent`    | VARCHAR(255) | NULL                                                     |
+| `ip_address`    | VARCHAR(45)  | NULL                                                     |
+
+No `updated_at` -- like the reset token, this row is written once and mutated exactly once (marking
+it revoked). `family_id` links every token descended from one original login: `rotate()` revokes the
+presented token and issues the next one in the same family; presenting an already-revoked token is
+treated as token theft and revokes the **entire family** in one bulk update (a separate
+`REQUIRES_NEW`-propagation bean, since the revoke-then-throw sequence would otherwise get rolled back
+by the enclosing transaction along with the exception it's raising). `revokeAllForUser` is called on
+password reset, account deactivation, and role change -- any event that should kill every existing
+session for that user.
+
+**Indexes:** unique on `token_hash`; index on `user_id`; index on `family_id`.
+
+---
+
 ## 4. Relationship Summary
 
 ```
@@ -358,6 +445,9 @@ WeeklyReport 1 ──< Achievement
 WeeklyReport 1 ──< WorkHour
 WeeklyReport 1 ──< ReportReview >── 1 User (reviewer)
 WeeklyReport 1 ──< ReportVersion
+User         1 ──< Invitation (invited_by)
+User         1 ──< PasswordResetToken
+User         1 ──< RefreshToken
 ```
 
 ---
@@ -424,8 +514,21 @@ V10__create_work_hours.sql
 V11__create_report_reviews.sql
 V12__create_report_versions.sql
 V13__create_indexes.sql
-V14__seed_data.sql
+V13_1__seed_roles.sql
+V14__seed_data.sql              (db/seed, dev-profile only)
+V15__seed_auth_data.sql         (db/seed, dev-profile only)
+V16__seed_project_assignments.sql (db/seed, dev-profile only)
+V17__add_review_acknowledged_at.sql
+V18__dashboard_indexes.sql
+V19__create_invitations.sql
+V20__create_password_reset_tokens.sql
+V21__create_refresh_tokens.sql
+V22__add_login_lockout.sql
 ```
+
+`db/seed` is only applied when the `dev` profile is active (see `application-dev.yml`'s
+`spring.flyway.locations`) -- a production deployment runs with `db/migration` alone and gets no
+demo accounts with known passwords.
 
 Set `spring.jpa.hibernate.ddl-auto=validate`. Never `update` or `create-drop`.
 

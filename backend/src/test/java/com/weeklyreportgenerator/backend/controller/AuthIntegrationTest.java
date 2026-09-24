@@ -1,7 +1,7 @@
 package com.weeklyreportgenerator.backend.controller;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.is;
-import static org.hamcrest.Matchers.notNullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -18,15 +18,22 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
+import jakarta.servlet.http.Cookie;
+
 // There is no public registration any more -- accounts exist only through the admin invitation
 // flow (see InvitationIntegrationTest) or the bootstrap admin. Fixture accounts here are created
 // with a direct JDBC insert as a stand-in for "an account exists", since this file's job is to
 // test login/me, not account creation.
+//
+// Auth is cookie-based now: login sets httpOnly access_token/refresh_token cookies and returns
+// only the user summary in the body -- there is no accessToken field to read any more.
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.MOCK)
 @AutoConfigureMockMvc
 @Testcontainers
@@ -66,33 +73,49 @@ class AuthIntegrationTest {
         return email;
     }
 
-    private String loginAndGetToken(String email, String password) throws Exception {
-        String response = mockMvc.perform(post("/api/auth/login")
+    // Logs in (cookies, not a Bearer token) and returns a RequestPostProcessor bundling the
+    // access_token + refresh_token cookies plus the X-XSRF-TOKEN header -- apply with .with(...).
+    private RequestPostProcessor loginAndGetToken(String email, String password) throws Exception {
+        MvcResult loginResult = mockMvc.perform(post("/api/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(loginBody(email, password)))
                 .andExpect(status().isOk())
-                .andReturn()
-                .getResponse()
-                .getContentAsString();
+                .andReturn();
+        Cookie accessTokenCookie = loginResult.getResponse().getCookie("access_token");
+        Cookie refreshTokenCookie = loginResult.getResponse().getCookie("refresh_token");
 
-        int start = response.indexOf("\"accessToken\":\"") + "\"accessToken\":\"".length();
-        int end = response.indexOf('"', start);
-        return response.substring(start, end);
+        Cookie xsrfCookie = mockMvc.perform(get("/api/auth/csrf").cookie(accessTokenCookie, refreshTokenCookie))
+                .andReturn().getResponse().getCookie("XSRF-TOKEN");
+
+        return request -> {
+            request.setCookies(accessTokenCookie, refreshTokenCookie, xsrfCookie);
+            request.addHeader("X-XSRF-TOKEN", xsrfCookie.getValue());
+            return request;
+        };
     }
 
     @Test
-    void loginWithCorrectCredentialsReturnsToken() throws Exception {
+    void loginWithCorrectCredentialsSetsCookiesAndReturnsUserSummary() throws Exception {
         String email = uniqueEmail("login-ok");
         createActiveTeamMember("Login User", email, "Password123");
 
-        mockMvc.perform(post("/api/auth/login")
+        MvcResult result = mockMvc.perform(post("/api/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(loginBody(email, "Password123")))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.accessToken", notNullValue()))
-                .andExpect(jsonPath("$.tokenType", is("Bearer")))
-                .andExpect(jsonPath("$.user.email", is(email)))
-                .andExpect(jsonPath("$.user.role", is("TEAM_MEMBER")));
+                .andExpect(jsonPath("$.email", is(email)))
+                .andExpect(jsonPath("$.role", is("TEAM_MEMBER")))
+                .andReturn();
+
+        // No token anywhere in the body -- both tokens travel only as httpOnly cookies.
+        assertThat(result.getResponse().getContentAsString().toLowerCase()).doesNotContain("token");
+
+        Cookie accessTokenCookie = result.getResponse().getCookie("access_token");
+        Cookie refreshTokenCookie = result.getResponse().getCookie("refresh_token");
+        assertThat(accessTokenCookie).isNotNull();
+        assertThat(accessTokenCookie.isHttpOnly()).isTrue();
+        assertThat(refreshTokenCookie).isNotNull();
+        assertThat(refreshTokenCookie.isHttpOnly()).isTrue();
     }
 
     @Test
@@ -109,19 +132,19 @@ class AuthIntegrationTest {
     }
 
     @Test
-    void meWithoutTokenReturns401() throws Exception {
+    void meWithoutCookieReturns401() throws Exception {
         mockMvc.perform(get("/api/auth/me"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.status", is(401)));
     }
 
     @Test
-    void meWithValidTokenReturnsCorrectUser() throws Exception {
+    void meWithValidCookieReturnsCorrectUser() throws Exception {
         String email = uniqueEmail("me-ok");
         createActiveTeamMember("Me User", email, "Password123");
-        String token = loginAndGetToken(email, "Password123");
+        RequestPostProcessor auth = loginAndGetToken(email, "Password123");
 
-        mockMvc.perform(get("/api/auth/me").header("Authorization", "Bearer " + token))
+        mockMvc.perform(get("/api/auth/me").with(auth))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.email", is(email)))
                 .andExpect(jsonPath("$.role", is("TEAM_MEMBER")));
@@ -131,9 +154,9 @@ class AuthIntegrationTest {
     void teamMemberTokenIsForbiddenOnManagerOnlyRoute() throws Exception {
         String email = uniqueEmail("rbac-member");
         createActiveTeamMember("RBAC Member", email, "Password123");
-        String token = loginAndGetToken(email, "Password123");
+        RequestPostProcessor auth = loginAndGetToken(email, "Password123");
 
-        mockMvc.perform(get("/api/test/manager-only").header("Authorization", "Bearer " + token))
+        mockMvc.perform(get("/api/test/manager-only").with(auth))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.status", is(403)))
                 .andExpect(jsonPath("$.error", is("FORBIDDEN")));
@@ -142,9 +165,9 @@ class AuthIntegrationTest {
     @Test
     void managerTokenIsAllowedOnManagerOnlyRoute() throws Exception {
         // manager@example.com is seeded by V15__seed_auth_data.sql
-        String token = loginAndGetToken("manager@example.com", "Password123");
+        RequestPostProcessor auth = loginAndGetToken("manager@example.com", "Password123");
 
-        mockMvc.perform(get("/api/test/manager-only").header("Authorization", "Bearer " + token))
+        mockMvc.perform(get("/api/test/manager-only").with(auth))
                 .andExpect(status().isOk());
     }
 }

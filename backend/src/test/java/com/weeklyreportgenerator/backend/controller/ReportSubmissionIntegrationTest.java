@@ -22,12 +22,16 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
 import com.weeklyreportgenerator.backend.repository.ReportVersionRepository;
+
+import jakarta.servlet.http.Cookie;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.MOCK)
 @AutoConfigureMockMvc
@@ -55,18 +59,27 @@ class ReportSubmissionIntegrationTest {
         return BASE_MONDAY.plusWeeks(WEEK_OFFSET.getAndIncrement());
     }
 
-    private String loginAndGetToken(String email, String password) throws Exception {
-        String response = mockMvc.perform(post("/api/auth/login")
+    // Logs in (cookies, not a Bearer token) and returns a RequestPostProcessor bundling the
+    // access_token + refresh_token cookies plus the X-XSRF-TOKEN header -- apply with .with(...).
+    private RequestPostProcessor loginAndGetToken(String email, String password) throws Exception {
+        MvcResult loginResult = mockMvc.perform(post("/api/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"email":"%s","password":"%s"}
                                 """.formatted(email, password)))
                 .andExpect(status().isOk())
-                .andReturn()
-                .getResponse()
-                .getContentAsString();
+                .andReturn();
+        Cookie accessTokenCookie = loginResult.getResponse().getCookie("access_token");
+        Cookie refreshTokenCookie = loginResult.getResponse().getCookie("refresh_token");
 
-        return extractJsonStringValue(response, "\"accessToken\":\"");
+        Cookie xsrfCookie = mockMvc.perform(get("/api/auth/csrf").cookie(accessTokenCookie, refreshTokenCookie))
+                .andReturn().getResponse().getCookie("XSRF-TOKEN");
+
+        return request -> {
+            request.setCookies(accessTokenCookie, refreshTokenCookie, xsrfCookie);
+            request.addHeader("X-XSRF-TOKEN", xsrfCookie.getValue());
+            return request;
+        };
     }
 
     private String extractJsonStringValue(String json, String key) {
@@ -84,7 +97,7 @@ class ReportSubmissionIntegrationTest {
         return json.substring(start, end);
     }
 
-    private Long createCompleteReport(String token, LocalDate weekStart) throws Exception {
+    private Long createCompleteReport(RequestPostProcessor token, LocalDate weekStart) throws Exception {
         String body = """
                 {"projectId":1,"weekStartDate":"%s","weekEndDate":"%s","summary":"Weekly work",
                  "tasks":[{"taskName":"T1","status":"COMPLETED","priority":"HIGH","plannedPercentage":100,
@@ -92,7 +105,7 @@ class ReportSubmissionIntegrationTest {
                 """.formatted(weekStart, weekStart.plusDays(6));
 
         String response = mockMvc.perform(post("/api/reports")
-                        .header("Authorization", "Bearer " + token)
+                        .with(token)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isCreated())
@@ -103,13 +116,13 @@ class ReportSubmissionIntegrationTest {
         return Long.valueOf(extractJsonStringValue(response, "\"id\":"));
     }
 
-    private Long createDraftReport(String token, LocalDate weekStart, String extraJson) throws Exception {
+    private Long createDraftReport(RequestPostProcessor token, LocalDate weekStart, String extraJson) throws Exception {
         String body = """
                 {"projectId":1,"weekStartDate":"%s","weekEndDate":"%s"%s}
                 """.formatted(weekStart, weekStart.plusDays(6), extraJson);
 
         String response = mockMvc.perform(post("/api/reports")
-                        .header("Authorization", "Bearer " + token)
+                        .with(token)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isCreated())
@@ -122,10 +135,10 @@ class ReportSubmissionIntegrationTest {
 
     @Test
     void submittingDraftSetsStatusSubmittedAndSubmittedAt() throws Exception {
-        String token = loginAndGetToken("member@example.com", "Password123");
+        RequestPostProcessor token = loginAndGetToken("member@example.com", "Password123");
         Long reportId = createCompleteReport(token, nextMonday());
 
-        mockMvc.perform(post("/api/reports/" + reportId + "/submit").header("Authorization", "Bearer " + token))
+        mockMvc.perform(post("/api/reports/" + reportId + "/submit").with(token))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status", is("SUBMITTED")))
                 .andExpect(jsonPath("$.submittedAt", notNullValue()))
@@ -134,10 +147,10 @@ class ReportSubmissionIntegrationTest {
 
     @Test
     void submittingCreatesExactlyOneVersionNumberedOne() throws Exception {
-        String token = loginAndGetToken("member@example.com", "Password123");
+        RequestPostProcessor token = loginAndGetToken("member@example.com", "Password123");
         Long reportId = createCompleteReport(token, nextMonday());
 
-        mockMvc.perform(post("/api/reports/" + reportId + "/submit").header("Authorization", "Bearer " + token))
+        mockMvc.perform(post("/api/reports/" + reportId + "/submit").with(token))
                 .andExpect(status().isOk());
 
         assertThat(reportVersionRepository.findByReportId(reportId)).hasSize(1);
@@ -146,39 +159,39 @@ class ReportSubmissionIntegrationTest {
 
     @Test
     void submittingAlreadySubmittedReportReturns409() throws Exception {
-        String token = loginAndGetToken("member@example.com", "Password123");
+        RequestPostProcessor token = loginAndGetToken("member@example.com", "Password123");
         Long reportId = createCompleteReport(token, nextMonday());
 
-        mockMvc.perform(post("/api/reports/" + reportId + "/submit").header("Authorization", "Bearer " + token))
+        mockMvc.perform(post("/api/reports/" + reportId + "/submit").with(token))
                 .andExpect(status().isOk());
 
-        mockMvc.perform(post("/api/reports/" + reportId + "/submit").header("Authorization", "Bearer " + token))
+        mockMvc.perform(post("/api/reports/" + reportId + "/submit").with(token))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error", is("CONFLICT")));
     }
 
     @Test
     void submittingApprovedReportReturns409() throws Exception {
-        String token = loginAndGetToken("member@example.com", "Password123");
+        RequestPostProcessor token = loginAndGetToken("member@example.com", "Password123");
         Long reportId = createCompleteReport(token, nextMonday());
 
-        mockMvc.perform(post("/api/reports/" + reportId + "/submit").header("Authorization", "Bearer " + token))
+        mockMvc.perform(post("/api/reports/" + reportId + "/submit").with(token))
                 .andExpect(status().isOk());
 
         // No APPROVE endpoint exists yet (added in the review step) -- force the state directly to
         // prove the workflow guard rejects submitting an already-APPROVED report.
         jdbcTemplate.update("UPDATE weekly_reports SET status = 'APPROVED' WHERE id = ?", reportId);
 
-        mockMvc.perform(post("/api/reports/" + reportId + "/submit").header("Authorization", "Bearer " + token))
+        mockMvc.perform(post("/api/reports/" + reportId + "/submit").with(token))
                 .andExpect(status().isConflict());
     }
 
     @Test
     void submittingReportWithZeroTasksReturns400() throws Exception {
-        String token = loginAndGetToken("member@example.com", "Password123");
+        RequestPostProcessor token = loginAndGetToken("member@example.com", "Password123");
         Long reportId = createDraftReport(token, nextMonday(), ",\"summary\":\"Has summary, no tasks\"");
 
-        mockMvc.perform(post("/api/reports/" + reportId + "/submit").header("Authorization", "Bearer " + token))
+        mockMvc.perform(post("/api/reports/" + reportId + "/submit").with(token))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error", is("VALIDATION_ERROR")))
                 .andExpect(jsonPath("$.errors[0]", notNullValue()));
@@ -186,12 +199,12 @@ class ReportSubmissionIntegrationTest {
 
     @Test
     void submittingWithBlankSummaryReturns400() throws Exception {
-        String token = loginAndGetToken("member@example.com", "Password123");
+        RequestPostProcessor token = loginAndGetToken("member@example.com", "Password123");
         String extra = ",\"tasks\":[{\"taskName\":\"T1\",\"status\":\"COMPLETED\",\"priority\":\"HIGH\","
                 + "\"plannedPercentage\":100,\"actualPercentage\":100,\"hoursPlanned\":8,\"hoursSpent\":8}]";
         Long reportId = createDraftReport(token, nextMonday(), extra);
 
-        mockMvc.perform(post("/api/reports/" + reportId + "/submit").header("Authorization", "Bearer " + token))
+        mockMvc.perform(post("/api/reports/" + reportId + "/submit").with(token))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors", hasSize(1)))
                 .andExpect(jsonPath("$.errors[0]", is("summary is required")));
@@ -199,10 +212,10 @@ class ReportSubmissionIntegrationTest {
 
     @Test
     void badRequestListsAllValidationFailuresNotJustTheFirst() throws Exception {
-        String token = loginAndGetToken("member@example.com", "Password123");
+        RequestPostProcessor token = loginAndGetToken("member@example.com", "Password123");
         Long reportId = createDraftReport(token, nextMonday(), "");
 
-        mockMvc.perform(post("/api/reports/" + reportId + "/submit").header("Authorization", "Bearer " + token))
+        mockMvc.perform(post("/api/reports/" + reportId + "/submit").with(token))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors", hasSize(2)))
                 .andExpect(jsonPath("$.errors[0]", is("At least one task is required before submitting")))
@@ -211,21 +224,21 @@ class ReportSubmissionIntegrationTest {
 
     @Test
     void memberASubmittingMemberBsReportReturns404() throws Exception {
-        String tokenA = loginAndGetToken("member@example.com", "Password123");
-        String tokenB = loginAndGetToken("member1@weeklyreport.com", "Password123!");
+        RequestPostProcessor tokenA = loginAndGetToken("member@example.com", "Password123");
+        RequestPostProcessor tokenB = loginAndGetToken("member1@weeklyreport.com", "Password123!");
         Long reportId = createCompleteReport(tokenB, nextMonday());
 
-        mockMvc.perform(post("/api/reports/" + reportId + "/submit").header("Authorization", "Bearer " + tokenA))
+        mockMvc.perform(post("/api/reports/" + reportId + "/submit").with(tokenA))
                 .andExpect(status().isNotFound());
     }
 
     @Test
     void putOnSubmittedReportReturns409() throws Exception {
-        String token = loginAndGetToken("member@example.com", "Password123");
+        RequestPostProcessor token = loginAndGetToken("member@example.com", "Password123");
         LocalDate monday = nextMonday();
         Long reportId = createCompleteReport(token, monday);
 
-        mockMvc.perform(post("/api/reports/" + reportId + "/submit").header("Authorization", "Bearer " + token))
+        mockMvc.perform(post("/api/reports/" + reportId + "/submit").with(token))
                 .andExpect(status().isOk());
 
         String body = """
@@ -233,7 +246,7 @@ class ReportSubmissionIntegrationTest {
                 """.formatted(monday, monday.plusDays(6));
 
         mockMvc.perform(put("/api/reports/" + reportId)
-                        .header("Authorization", "Bearer " + token)
+                        .with(token)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isConflict());
@@ -241,26 +254,26 @@ class ReportSubmissionIntegrationTest {
 
     @Test
     void deleteOnSubmittedReportReturns409() throws Exception {
-        String token = loginAndGetToken("member@example.com", "Password123");
+        RequestPostProcessor token = loginAndGetToken("member@example.com", "Password123");
         Long reportId = createCompleteReport(token, nextMonday());
 
-        mockMvc.perform(post("/api/reports/" + reportId + "/submit").header("Authorization", "Bearer " + token))
+        mockMvc.perform(post("/api/reports/" + reportId + "/submit").with(token))
                 .andExpect(status().isOk());
 
-        mockMvc.perform(delete("/api/reports/" + reportId).header("Authorization", "Bearer " + token))
+        mockMvc.perform(delete("/api/reports/" + reportId).with(token))
                 .andExpect(status().isConflict());
     }
 
     @Test
     void snapshotRoundTripMatchesSubmittedContent() throws Exception {
-        String token = loginAndGetToken("member@example.com", "Password123");
+        RequestPostProcessor token = loginAndGetToken("member@example.com", "Password123");
         LocalDate monday = nextMonday();
         Long reportId = createCompleteReport(token, monday);
 
-        mockMvc.perform(post("/api/reports/" + reportId + "/submit").header("Authorization", "Bearer " + token))
+        mockMvc.perform(post("/api/reports/" + reportId + "/submit").with(token))
                 .andExpect(status().isOk());
 
-        mockMvc.perform(get("/api/reports/" + reportId + "/versions/1").header("Authorization", "Bearer " + token))
+        mockMvc.perform(get("/api/reports/" + reportId + "/versions/1").with(token))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id", is(reportId.intValue())))
                 .andExpect(jsonPath("$.weekStartDate", is(monday.toString())))

@@ -19,6 +19,8 @@ import org.springframework.boot.testcontainers.service.connection.ServiceConnect
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -26,6 +28,8 @@ import org.testcontainers.utility.DockerImageName;
 
 import com.weeklyreportgenerator.backend.repository.ReportReviewRepository;
 import com.weeklyreportgenerator.backend.repository.ReportVersionRepository;
+
+import jakarta.servlet.http.Cookie;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.MOCK)
 @AutoConfigureMockMvc
@@ -53,18 +57,27 @@ class ManagerReviewIntegrationTest {
         return BASE_MONDAY.plusWeeks(WEEK_OFFSET.getAndIncrement());
     }
 
-    private String loginAndGetToken(String email, String password) throws Exception {
-        String response = mockMvc.perform(post("/api/auth/login")
+    // Logs in (cookies, not a Bearer token) and returns a RequestPostProcessor bundling the
+    // access_token + refresh_token cookies plus the X-XSRF-TOKEN header -- apply with .with(...).
+    private RequestPostProcessor loginAndGetToken(String email, String password) throws Exception {
+        MvcResult loginResult = mockMvc.perform(post("/api/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"email":"%s","password":"%s"}
                                 """.formatted(email, password)))
                 .andExpect(status().isOk())
-                .andReturn()
-                .getResponse()
-                .getContentAsString();
+                .andReturn();
+        Cookie accessTokenCookie = loginResult.getResponse().getCookie("access_token");
+        Cookie refreshTokenCookie = loginResult.getResponse().getCookie("refresh_token");
 
-        return extractJsonStringValue(response, "\"accessToken\":\"");
+        Cookie xsrfCookie = mockMvc.perform(get("/api/auth/csrf").cookie(accessTokenCookie, refreshTokenCookie))
+                .andReturn().getResponse().getCookie("XSRF-TOKEN");
+
+        return request -> {
+            request.setCookies(accessTokenCookie, refreshTokenCookie, xsrfCookie);
+            request.addHeader("X-XSRF-TOKEN", xsrfCookie.getValue());
+            return request;
+        };
     }
 
     private String extractJsonStringValue(String json, String key) {
@@ -82,15 +95,15 @@ class ManagerReviewIntegrationTest {
         return json.substring(start, end);
     }
 
-    private String memberToken() throws Exception {
+    private RequestPostProcessor memberToken() throws Exception {
         return loginAndGetToken("member@example.com", "Password123");
     }
 
-    private String managerToken() throws Exception {
+    private RequestPostProcessor managerToken() throws Exception {
         return loginAndGetToken("manager@example.com", "Password123");
     }
 
-    private Long createAndSubmitReport(String memberToken, LocalDate weekStart, String summary) throws Exception {
+    private Long createAndSubmitReport(RequestPostProcessor memberToken, LocalDate weekStart, String summary) throws Exception {
         String body = """
                 {"projectId":1,"weekStartDate":"%s","weekEndDate":"%s","summary":"%s",
                  "tasks":[{"taskName":"T1","status":"COMPLETED","priority":"HIGH","plannedPercentage":100,
@@ -98,7 +111,7 @@ class ManagerReviewIntegrationTest {
                 """.formatted(weekStart, weekStart.plusDays(6), summary);
 
         String response = mockMvc.perform(post("/api/reports")
-                        .header("Authorization", "Bearer " + memberToken)
+                        .with(memberToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isCreated())
@@ -108,7 +121,7 @@ class ManagerReviewIntegrationTest {
 
         Long reportId = Long.valueOf(extractJsonStringValue(response, "\"id\":"));
 
-        mockMvc.perform(post("/api/reports/" + reportId + "/submit").header("Authorization", "Bearer " + memberToken))
+        mockMvc.perform(post("/api/reports/" + reportId + "/submit").with(memberToken))
                 .andExpect(status().isOk());
 
         return reportId;
@@ -118,34 +131,34 @@ class ManagerReviewIntegrationTest {
 
     @Test
     void teamMemberGetsForbiddenOnManagerReportsList() throws Exception {
-        String token = memberToken();
-        mockMvc.perform(get("/api/manager/reports").header("Authorization", "Bearer " + token))
+        RequestPostProcessor token = memberToken();
+        mockMvc.perform(get("/api/manager/reports").with(token))
                 .andExpect(status().isForbidden());
     }
 
     @Test
     void teamMemberGetsForbiddenOnManagerReportDetail() throws Exception {
-        String memberToken = memberToken();
+        RequestPostProcessor memberToken = memberToken();
         Long reportId = createAndSubmitReport(memberToken, nextMonday(), "Forbidden detail test");
 
-        mockMvc.perform(get("/api/manager/reports/" + reportId).header("Authorization", "Bearer " + memberToken))
+        mockMvc.perform(get("/api/manager/reports/" + reportId).with(memberToken))
                 .andExpect(status().isForbidden());
     }
 
     @Test
     void teamMemberGetsForbiddenOnTeamMembersList() throws Exception {
-        String token = memberToken();
-        mockMvc.perform(get("/api/manager/team-members").header("Authorization", "Bearer " + token))
+        RequestPostProcessor token = memberToken();
+        mockMvc.perform(get("/api/manager/team-members").with(token))
                 .andExpect(status().isForbidden());
     }
 
     @Test
     void teamMemberGetsForbiddenOnApprove() throws Exception {
-        String memberToken = memberToken();
+        RequestPostProcessor memberToken = memberToken();
         Long reportId = createAndSubmitReport(memberToken, nextMonday(), "Forbidden approve test");
 
         mockMvc.perform(post("/api/manager/reports/" + reportId + "/approve")
-                        .header("Authorization", "Bearer " + memberToken)
+                        .with(memberToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{}"))
                 .andExpect(status().isForbidden());
@@ -153,11 +166,11 @@ class ManagerReviewIntegrationTest {
 
     @Test
     void teamMemberGetsForbiddenOnRequestChanges() throws Exception {
-        String memberToken = memberToken();
+        RequestPostProcessor memberToken = memberToken();
         Long reportId = createAndSubmitReport(memberToken, nextMonday(), "Forbidden request-changes test");
 
         mockMvc.perform(post("/api/manager/reports/" + reportId + "/request-changes")
-                        .header("Authorization", "Bearer " + memberToken)
+                        .with(memberToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"comment\":\"Please add more detail here.\"}"))
                 .andExpect(status().isForbidden());
@@ -170,11 +183,11 @@ class ManagerReviewIntegrationTest {
 
     @Test
     void managerCanReadReportOwnedByAnyMember() throws Exception {
-        String memberToken = memberToken();
-        String managerToken = managerToken();
+        RequestPostProcessor memberToken = memberToken();
+        RequestPostProcessor managerToken = managerToken();
         Long reportId = createAndSubmitReport(memberToken, nextMonday(), "Manager can read this");
 
-        mockMvc.perform(get("/api/manager/reports/" + reportId).header("Authorization", "Bearer " + managerToken))
+        mockMvc.perform(get("/api/manager/reports/" + reportId).with(managerToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.report.id", is(reportId.intValue())))
                 .andExpect(jsonPath("$.ownerEmail", is("member@example.com")));
@@ -184,12 +197,12 @@ class ManagerReviewIntegrationTest {
 
     @Test
     void approveOnSubmittedTransitionsToApprovedAndWritesReviewWithCorrectVersion() throws Exception {
-        String memberToken = memberToken();
-        String managerToken = managerToken();
+        RequestPostProcessor memberToken = memberToken();
+        RequestPostProcessor managerToken = managerToken();
         Long reportId = createAndSubmitReport(memberToken, nextMonday(), "Approve workflow test");
 
         mockMvc.perform(post("/api/manager/reports/" + reportId + "/approve")
-                        .header("Authorization", "Bearer " + managerToken)
+                        .with(managerToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"comment\":\"Good work\"}"))
                 .andExpect(status().isOk())
@@ -202,12 +215,12 @@ class ManagerReviewIntegrationTest {
 
     @Test
     void requestChangesOnSubmittedTransitionsToNeedsCorrectionAndPersistsComment() throws Exception {
-        String memberToken = memberToken();
-        String managerToken = managerToken();
+        RequestPostProcessor memberToken = memberToken();
+        RequestPostProcessor managerToken = managerToken();
         Long reportId = createAndSubmitReport(memberToken, nextMonday(), "Request changes workflow test");
 
         mockMvc.perform(post("/api/manager/reports/" + reportId + "/request-changes")
-                        .header("Authorization", "Bearer " + managerToken)
+                        .with(managerToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"comment\":\"Please add more detail here.\"}"))
                 .andExpect(status().isOk())
@@ -217,12 +230,12 @@ class ManagerReviewIntegrationTest {
 
     @Test
     void requestChangesWithBlankCommentReturns400() throws Exception {
-        String memberToken = memberToken();
-        String managerToken = managerToken();
+        RequestPostProcessor memberToken = memberToken();
+        RequestPostProcessor managerToken = managerToken();
         Long reportId = createAndSubmitReport(memberToken, nextMonday(), "Blank comment test");
 
         mockMvc.perform(post("/api/manager/reports/" + reportId + "/request-changes")
-                        .header("Authorization", "Bearer " + managerToken)
+                        .with(managerToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"comment\":\"\"}"))
                 .andExpect(status().isBadRequest());
@@ -230,15 +243,15 @@ class ManagerReviewIntegrationTest {
 
     @Test
     void approveOnDraftReturns409() throws Exception {
-        String memberToken = memberToken();
-        String managerToken = managerToken();
+        RequestPostProcessor memberToken = memberToken();
+        RequestPostProcessor managerToken = managerToken();
         LocalDate monday = nextMonday();
         String body = """
                 {"projectId":1,"weekStartDate":"%s","weekEndDate":"%s","summary":"still a draft"}
                 """.formatted(monday, monday.plusDays(6));
 
         String response = mockMvc.perform(post("/api/reports")
-                        .header("Authorization", "Bearer " + memberToken)
+                        .with(memberToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isCreated())
@@ -248,7 +261,7 @@ class ManagerReviewIntegrationTest {
         Long reportId = Long.valueOf(extractJsonStringValue(response, "\"id\":"));
 
         mockMvc.perform(post("/api/manager/reports/" + reportId + "/approve")
-                        .header("Authorization", "Bearer " + managerToken)
+                        .with(managerToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{}"))
                 .andExpect(status().isConflict());
@@ -256,18 +269,18 @@ class ManagerReviewIntegrationTest {
 
     @Test
     void approveOnAlreadyApprovedReportReturns409() throws Exception {
-        String memberToken = memberToken();
-        String managerToken = managerToken();
+        RequestPostProcessor memberToken = memberToken();
+        RequestPostProcessor managerToken = managerToken();
         Long reportId = createAndSubmitReport(memberToken, nextMonday(), "Already approved test");
 
         mockMvc.perform(post("/api/manager/reports/" + reportId + "/approve")
-                        .header("Authorization", "Bearer " + managerToken)
+                        .with(managerToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{}"))
                 .andExpect(status().isOk());
 
         mockMvc.perform(post("/api/manager/reports/" + reportId + "/approve")
-                        .header("Authorization", "Bearer " + managerToken)
+                        .with(managerToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{}"))
                 .andExpect(status().isConflict());
@@ -275,18 +288,18 @@ class ManagerReviewIntegrationTest {
 
     @Test
     void requestChangesOnNeedsCorrectionReportReturns409() throws Exception {
-        String memberToken = memberToken();
-        String managerToken = managerToken();
+        RequestPostProcessor memberToken = memberToken();
+        RequestPostProcessor managerToken = managerToken();
         Long reportId = createAndSubmitReport(memberToken, nextMonday(), "Needs correction repeat test");
 
         mockMvc.perform(post("/api/manager/reports/" + reportId + "/request-changes")
-                        .header("Authorization", "Bearer " + managerToken)
+                        .with(managerToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"comment\":\"Please add more detail here.\"}"))
                 .andExpect(status().isOk());
 
         mockMvc.perform(post("/api/manager/reports/" + reportId + "/request-changes")
-                        .header("Authorization", "Bearer " + managerToken)
+                        .with(managerToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"comment\":\"Please add even more detail here.\"}"))
                 .andExpect(status().isConflict());
@@ -296,12 +309,12 @@ class ManagerReviewIntegrationTest {
 
     @Test
     void reviewRequestWithExtraContentFieldsLeavesReportContentUnchanged() throws Exception {
-        String memberToken = memberToken();
-        String managerToken = managerToken();
+        RequestPostProcessor memberToken = memberToken();
+        RequestPostProcessor managerToken = managerToken();
         Long reportId = createAndSubmitReport(memberToken, nextMonday(), "Content protection test");
 
         mockMvc.perform(post("/api/manager/reports/" + reportId + "/approve")
-                        .header("Authorization", "Bearer " + managerToken)
+                        .with(managerToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"comment":"Approved","summary":"HACKED","status":"DRAFT","tasks":[]}
@@ -316,14 +329,14 @@ class ManagerReviewIntegrationTest {
 
     @Test
     void fullCycleFromDraftThroughCorrectionToApproval() throws Exception {
-        String memberToken = memberToken();
-        String managerToken = managerToken();
+        RequestPostProcessor memberToken = memberToken();
+        RequestPostProcessor managerToken = managerToken();
         LocalDate monday = nextMonday();
 
         Long reportId = createAndSubmitReport(memberToken, monday, "Original v1 content");
 
         mockMvc.perform(post("/api/manager/reports/" + reportId + "/request-changes")
-                        .header("Authorization", "Bearer " + managerToken)
+                        .with(managerToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"comment\":\"Please add more detail about testing.\"}"))
                 .andExpect(status().isOk())
@@ -336,17 +349,17 @@ class ManagerReviewIntegrationTest {
                 """.formatted(monday, monday.plusDays(6));
 
         mockMvc.perform(put("/api/reports/" + reportId)
-                        .header("Authorization", "Bearer " + memberToken)
+                        .with(memberToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(editBody))
                 .andExpect(status().isOk());
 
-        mockMvc.perform(post("/api/reports/" + reportId + "/submit").header("Authorization", "Bearer " + memberToken))
+        mockMvc.perform(post("/api/reports/" + reportId + "/submit").with(memberToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.currentVersion", is(2)));
 
         mockMvc.perform(post("/api/manager/reports/" + reportId + "/approve")
-                        .header("Authorization", "Bearer " + managerToken)
+                        .with(managerToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"comment\":\"Looks good now\"}"))
                 .andExpect(status().isOk())
@@ -358,11 +371,11 @@ class ManagerReviewIntegrationTest {
         reportReviewRepository.findByReportId(reportId).forEach(review ->
                 assertThat(review.getVersionNumber()).isNotNull());
 
-        mockMvc.perform(get("/api/reports/" + reportId + "/versions/1").header("Authorization", "Bearer " + memberToken))
+        mockMvc.perform(get("/api/reports/" + reportId + "/versions/1").with(memberToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.summary", is("Original v1 content")));
 
-        mockMvc.perform(get("/api/reports/" + reportId + "/versions/2").header("Authorization", "Bearer " + memberToken))
+        mockMvc.perform(get("/api/reports/" + reportId + "/versions/2").with(memberToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.summary", is("Edited v2 content")));
     }

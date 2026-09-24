@@ -19,6 +19,8 @@ import org.springframework.boot.testcontainers.service.connection.ServiceConnect
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -27,6 +29,8 @@ import org.testcontainers.utility.DockerImageName;
 import com.weeklyreportgenerator.backend.entity.ReportReview;
 import com.weeklyreportgenerator.backend.repository.ReportReviewRepository;
 import com.weeklyreportgenerator.backend.repository.ReportVersionRepository;
+
+import jakarta.servlet.http.Cookie;
 
 // Verification-and-gap-fill pass for the correction cycle. Every scenario here runs through the
 // existing ReportWorkflowService / PUT+submit endpoints -- no new service or state machine.
@@ -56,18 +60,27 @@ class CorrectionCycleIntegrationTest {
         return BASE_MONDAY.plusWeeks(WEEK_OFFSET.getAndIncrement());
     }
 
-    private String loginAndGetToken(String email, String password) throws Exception {
-        String response = mockMvc.perform(post("/api/auth/login")
+    // Logs in (cookies, not a Bearer token) and returns a RequestPostProcessor bundling the
+    // access_token + refresh_token cookies plus the X-XSRF-TOKEN header -- apply with .with(...).
+    private RequestPostProcessor loginAndGetToken(String email, String password) throws Exception {
+        MvcResult loginResult = mockMvc.perform(post("/api/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"email":"%s","password":"%s"}
                                 """.formatted(email, password)))
                 .andExpect(status().isOk())
-                .andReturn()
-                .getResponse()
-                .getContentAsString();
+                .andReturn();
+        Cookie accessTokenCookie = loginResult.getResponse().getCookie("access_token");
+        Cookie refreshTokenCookie = loginResult.getResponse().getCookie("refresh_token");
 
-        return extractJsonStringValue(response, "\"accessToken\":\"");
+        Cookie xsrfCookie = mockMvc.perform(get("/api/auth/csrf").cookie(accessTokenCookie, refreshTokenCookie))
+                .andReturn().getResponse().getCookie("XSRF-TOKEN");
+
+        return request -> {
+            request.setCookies(accessTokenCookie, refreshTokenCookie, xsrfCookie);
+            request.addHeader("X-XSRF-TOKEN", xsrfCookie.getValue());
+            return request;
+        };
     }
 
     private String extractJsonStringValue(String json, String key) {
@@ -85,15 +98,15 @@ class CorrectionCycleIntegrationTest {
         return json.substring(start, end);
     }
 
-    private String memberToken() throws Exception {
+    private RequestPostProcessor memberToken() throws Exception {
         return loginAndGetToken("member@example.com", "Password123");
     }
 
-    private String otherMemberToken() throws Exception {
+    private RequestPostProcessor otherMemberToken() throws Exception {
         return loginAndGetToken("member1@weeklyreport.com", "Password123!");
     }
 
-    private String managerToken() throws Exception {
+    private RequestPostProcessor managerToken() throws Exception {
         return loginAndGetToken("manager@example.com", "Password123");
     }
 
@@ -105,9 +118,9 @@ class CorrectionCycleIntegrationTest {
                 """.formatted(weekStart, weekStart.plusDays(6), summary);
     }
 
-    private Long createReport(String token, LocalDate weekStart, String summary) throws Exception {
+    private Long createReport(RequestPostProcessor token, LocalDate weekStart, String summary) throws Exception {
         String response = mockMvc.perform(post("/api/reports")
-                        .header("Authorization", "Bearer " + token)
+                        .with(token)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(reportBody(weekStart, summary)))
                 .andExpect(status().isCreated())
@@ -117,20 +130,20 @@ class CorrectionCycleIntegrationTest {
         return Long.valueOf(extractJsonStringValue(response, "\"id\":"));
     }
 
-    private void submit(String token, Long reportId) throws Exception {
-        mockMvc.perform(post("/api/reports/" + reportId + "/submit").header("Authorization", "Bearer " + token))
+    private void submit(RequestPostProcessor token, Long reportId) throws Exception {
+        mockMvc.perform(post("/api/reports/" + reportId + "/submit").with(token))
                 .andExpect(status().isOk());
     }
 
-    private void requestChanges(String managerToken, Long reportId, String comment) throws Exception {
+    private void requestChanges(RequestPostProcessor managerToken, Long reportId, String comment) throws Exception {
         mockMvc.perform(post("/api/manager/reports/" + reportId + "/request-changes")
-                        .header("Authorization", "Bearer " + managerToken)
+                        .with(managerToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"comment\":\"%s\"}".formatted(comment)))
                 .andExpect(status().isOk());
     }
 
-    private Long createSubmitAndSendBack(String memberToken, String managerToken, LocalDate monday, String summary)
+    private Long createSubmitAndSendBack(RequestPostProcessor memberToken, RequestPostProcessor managerToken, LocalDate monday, String summary)
             throws Exception {
         Long reportId = createReport(memberToken, monday, summary);
         submit(memberToken, reportId);
@@ -140,8 +153,8 @@ class CorrectionCycleIntegrationTest {
 
     @Test
     void editingNeedsCorrectionReportLeavesStatusAndVersionAlone() throws Exception {
-        String memberToken = memberToken();
-        String managerToken = managerToken();
+        RequestPostProcessor memberToken = memberToken();
+        RequestPostProcessor managerToken = managerToken();
         LocalDate monday = nextMonday();
         Long reportId = createSubmitAndSendBack(memberToken, managerToken, monday, "Original content");
 
@@ -152,7 +165,7 @@ class CorrectionCycleIntegrationTest {
                 """.formatted(monday, monday.plusDays(6));
 
         mockMvc.perform(put("/api/reports/" + reportId)
-                        .header("Authorization", "Bearer " + memberToken)
+                        .with(memberToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(editBody))
                 .andExpect(status().isOk())
@@ -162,8 +175,8 @@ class CorrectionCycleIntegrationTest {
 
     @Test
     void resubmitProducesVersionTwoAndLeavesVersionOneSnapshotUntouched() throws Exception {
-        String memberToken = memberToken();
-        String managerToken = managerToken();
+        RequestPostProcessor memberToken = memberToken();
+        RequestPostProcessor managerToken = managerToken();
         LocalDate monday = nextMonday();
         Long reportId = createSubmitAndSendBack(memberToken, managerToken, monday, "Original v1 content");
 
@@ -173,37 +186,37 @@ class CorrectionCycleIntegrationTest {
                            "actualPercentage":100,"hoursPlanned":8,"hoursSpent":8}]}
                 """.formatted(monday, monday.plusDays(6));
         mockMvc.perform(put("/api/reports/" + reportId)
-                        .header("Authorization", "Bearer " + memberToken)
+                        .with(memberToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(editBody))
                 .andExpect(status().isOk());
 
-        mockMvc.perform(post("/api/reports/" + reportId + "/submit").header("Authorization", "Bearer " + memberToken))
+        mockMvc.perform(post("/api/reports/" + reportId + "/submit").with(memberToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.currentVersion", is(2)));
 
         assertThat(reportVersionRepository.findByReportId(reportId)).hasSize(2);
 
-        mockMvc.perform(get("/api/reports/" + reportId + "/versions/1").header("Authorization", "Bearer " + memberToken))
+        mockMvc.perform(get("/api/reports/" + reportId + "/versions/1").with(memberToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.summary", is("Original v1 content")));
 
-        mockMvc.perform(get("/api/reports/" + reportId + "/versions/2").header("Authorization", "Bearer " + memberToken))
+        mockMvc.perform(get("/api/reports/" + reportId + "/versions/2").with(memberToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.summary", is("Edited v2 content")));
     }
 
     @Test
     void needsCorrectionQueueReturnsOnlyCallersReportsNeverAnotherMembers() throws Exception {
-        String memberToken = memberToken();
-        String otherMemberToken = otherMemberToken();
-        String managerToken = managerToken();
+        RequestPostProcessor memberToken = memberToken();
+        RequestPostProcessor otherMemberToken = otherMemberToken();
+        RequestPostProcessor managerToken = managerToken();
 
         Long ownReportId = createSubmitAndSendBack(memberToken, managerToken, nextMonday(), "My own report");
         Long otherReportId = createSubmitAndSendBack(otherMemberToken, managerToken, nextMonday(), "Someone else's report");
 
         String response = mockMvc.perform(get("/api/reports/needs-correction")
-                        .header("Authorization", "Bearer " + memberToken))
+                        .with(memberToken))
                 .andReturn()
                 .getResponse()
                 .getContentAsString();
@@ -214,8 +227,8 @@ class CorrectionCycleIntegrationTest {
 
     @Test
     void changingProjectOrWeekOnPreviouslySubmittedReportReturns409() throws Exception {
-        String memberToken = memberToken();
-        String managerToken = managerToken();
+        RequestPostProcessor memberToken = memberToken();
+        RequestPostProcessor managerToken = managerToken();
         LocalDate monday = nextMonday();
         Long reportId = createSubmitAndSendBack(memberToken, managerToken, monday, "Locked identity test");
 
@@ -223,7 +236,7 @@ class CorrectionCycleIntegrationTest {
                 {"projectId":2,"weekStartDate":"%s","weekEndDate":"%s","summary":"trying to switch project"}
                 """.formatted(monday, monday.plusDays(6));
         mockMvc.perform(put("/api/reports/" + reportId)
-                        .header("Authorization", "Bearer " + memberToken)
+                        .with(memberToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(changedProject))
                 .andExpect(status().isConflict());
@@ -233,7 +246,7 @@ class CorrectionCycleIntegrationTest {
                 {"projectId":1,"weekStartDate":"%s","weekEndDate":"%s","summary":"trying to switch week"}
                 """.formatted(otherMonday, otherMonday.plusDays(6));
         mockMvc.perform(put("/api/reports/" + reportId)
-                        .header("Authorization", "Bearer " + memberToken)
+                        .with(memberToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(changedWeek))
                 .andExpect(status().isConflict());
@@ -241,11 +254,11 @@ class CorrectionCycleIntegrationTest {
 
     @Test
     void acknowledgeSetsFlagAndIsIdempotent() throws Exception {
-        String memberToken = memberToken();
-        String managerToken = managerToken();
+        RequestPostProcessor memberToken = memberToken();
+        RequestPostProcessor managerToken = managerToken();
         Long reportId = createSubmitAndSendBack(memberToken, managerToken, nextMonday(), "Acknowledge test");
 
-        String detail = mockMvc.perform(get("/api/reports/" + reportId).header("Authorization", "Bearer " + memberToken))
+        String detail = mockMvc.perform(get("/api/reports/" + reportId).with(memberToken))
                 .andExpect(jsonPath("$.hasUnreadReview", is(true)))
                 .andReturn()
                 .getResponse()
@@ -255,39 +268,39 @@ class CorrectionCycleIntegrationTest {
         Long reviewId = Long.valueOf(extractJsonStringValue(reviewsSection, "\"id\":"));
 
         mockMvc.perform(post("/api/reports/" + reportId + "/reviews/" + reviewId + "/acknowledge")
-                        .header("Authorization", "Bearer " + memberToken))
+                        .with(memberToken))
                 .andExpect(status().isNoContent());
 
-        mockMvc.perform(get("/api/reports/" + reportId).header("Authorization", "Bearer " + memberToken))
+        mockMvc.perform(get("/api/reports/" + reportId).with(memberToken))
                 .andExpect(jsonPath("$.hasUnreadReview", is(false)));
 
         mockMvc.perform(post("/api/reports/" + reportId + "/reviews/" + reviewId + "/acknowledge")
-                        .header("Authorization", "Bearer " + memberToken))
+                        .with(memberToken))
                 .andExpect(status().isNoContent());
     }
 
     @Test
     void acknowledgingAnotherMembersReviewReturns404() throws Exception {
-        String memberToken = memberToken();
-        String otherMemberToken = otherMemberToken();
-        String managerToken = managerToken();
+        RequestPostProcessor memberToken = memberToken();
+        RequestPostProcessor otherMemberToken = otherMemberToken();
+        RequestPostProcessor managerToken = managerToken();
         Long reportId = createSubmitAndSendBack(memberToken, managerToken, nextMonday(), "Cross-member acknowledge test");
 
         List<ReportReview> reviews = reportReviewRepository.findByReportId(reportId);
         Long reviewId = reviews.get(0).getId();
 
         mockMvc.perform(post("/api/reports/" + reportId + "/reviews/" + reviewId + "/acknowledge")
-                        .header("Authorization", "Bearer " + otherMemberToken))
+                        .with(otherMemberToken))
                 .andExpect(status().isNotFound());
     }
 
     @Test
     void resubmittingWithZeroContentChangesReturns409() throws Exception {
-        String memberToken = memberToken();
-        String managerToken = managerToken();
+        RequestPostProcessor memberToken = memberToken();
+        RequestPostProcessor managerToken = managerToken();
         Long reportId = createSubmitAndSendBack(memberToken, managerToken, nextMonday(), "No-op resubmit test");
 
-        mockMvc.perform(post("/api/reports/" + reportId + "/submit").header("Authorization", "Bearer " + memberToken))
+        mockMvc.perform(post("/api/reports/" + reportId + "/submit").with(memberToken))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.message", is(
                         "No changes were made since the manager's feedback -- edit the report before resubmitting")));
@@ -295,8 +308,8 @@ class CorrectionCycleIntegrationTest {
 
     @Test
     void resubmittingAfterARealEditSucceeds() throws Exception {
-        String memberToken = memberToken();
-        String managerToken = managerToken();
+        RequestPostProcessor memberToken = memberToken();
+        RequestPostProcessor managerToken = managerToken();
         LocalDate monday = nextMonday();
         Long reportId = createSubmitAndSendBack(memberToken, managerToken, monday, "Real edit test");
 
@@ -306,12 +319,12 @@ class CorrectionCycleIntegrationTest {
                            "actualPercentage":100,"hoursPlanned":8,"hoursSpent":8}]}
                 """.formatted(monday, monday.plusDays(6));
         mockMvc.perform(put("/api/reports/" + reportId)
-                        .header("Authorization", "Bearer " + memberToken)
+                        .with(memberToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(editBody))
                 .andExpect(status().isOk());
 
-        mockMvc.perform(post("/api/reports/" + reportId + "/submit").header("Authorization", "Bearer " + memberToken))
+        mockMvc.perform(post("/api/reports/" + reportId + "/submit").with(memberToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status", is("SUBMITTED")))
                 .andExpect(jsonPath("$.currentVersion", is(2)));
@@ -319,8 +332,8 @@ class CorrectionCycleIntegrationTest {
 
     @Test
     void secondCorrectionRoundProducesThreeVersionsAndThreeReviews() throws Exception {
-        String memberToken = memberToken();
-        String managerToken = managerToken();
+        RequestPostProcessor memberToken = memberToken();
+        RequestPostProcessor managerToken = managerToken();
         LocalDate monday = nextMonday();
 
         Long reportId = createSubmitAndSendBack(memberToken, managerToken, monday, "v1 content");
@@ -331,11 +344,11 @@ class CorrectionCycleIntegrationTest {
                            "actualPercentage":100,"hoursPlanned":8,"hoursSpent":8}]}
                 """.formatted(monday, monday.plusDays(6));
         mockMvc.perform(put("/api/reports/" + reportId)
-                        .header("Authorization", "Bearer " + memberToken)
+                        .with(memberToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(v2Body))
                 .andExpect(status().isOk());
-        mockMvc.perform(post("/api/reports/" + reportId + "/submit").header("Authorization", "Bearer " + memberToken))
+        mockMvc.perform(post("/api/reports/" + reportId + "/submit").with(memberToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.currentVersion", is(2)));
 
@@ -347,11 +360,11 @@ class CorrectionCycleIntegrationTest {
                            "actualPercentage":100,"hoursPlanned":8,"hoursSpent":8}]}
                 """.formatted(monday, monday.plusDays(6));
         mockMvc.perform(put("/api/reports/" + reportId)
-                        .header("Authorization", "Bearer " + memberToken)
+                        .with(memberToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(v3Body))
                 .andExpect(status().isOk());
-        mockMvc.perform(post("/api/reports/" + reportId + "/submit").header("Authorization", "Bearer " + memberToken))
+        mockMvc.perform(post("/api/reports/" + reportId + "/submit").with(memberToken))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.currentVersion", is(3)));
 
@@ -359,7 +372,7 @@ class CorrectionCycleIntegrationTest {
         assertThat(reportReviewRepository.findByReportId(reportId)).hasSize(2);
 
         mockMvc.perform(post("/api/manager/reports/" + reportId + "/approve")
-                        .header("Authorization", "Bearer " + managerToken)
+                        .with(managerToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"comment\":\"Approved on third try\"}"))
                 .andExpect(status().isOk())
@@ -368,11 +381,11 @@ class CorrectionCycleIntegrationTest {
         assertThat(reportVersionRepository.findByReportId(reportId)).hasSize(3);
         assertThat(reportReviewRepository.findByReportId(reportId)).hasSize(3);
 
-        mockMvc.perform(get("/api/reports/" + reportId + "/versions/1").header("Authorization", "Bearer " + memberToken))
+        mockMvc.perform(get("/api/reports/" + reportId + "/versions/1").with(memberToken))
                 .andExpect(jsonPath("$.summary", is("v1 content")));
-        mockMvc.perform(get("/api/reports/" + reportId + "/versions/2").header("Authorization", "Bearer " + memberToken))
+        mockMvc.perform(get("/api/reports/" + reportId + "/versions/2").with(memberToken))
                 .andExpect(jsonPath("$.summary", is("v2 content")));
-        mockMvc.perform(get("/api/reports/" + reportId + "/versions/3").header("Authorization", "Bearer " + memberToken))
+        mockMvc.perform(get("/api/reports/" + reportId + "/versions/3").with(memberToken))
                 .andExpect(jsonPath("$.summary", is("v3 content")));
     }
 }

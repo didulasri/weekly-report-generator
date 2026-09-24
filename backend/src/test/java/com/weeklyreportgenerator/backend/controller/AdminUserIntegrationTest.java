@@ -20,10 +20,14 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
+
+import jakarta.servlet.http.Cookie;
 
 // Admin user-management module. Every guard lives in AdminUserService (self-role-change,
 // self-deactivation, last-active-admin), enforced with @PreAuthorize on the service method --
@@ -49,17 +53,28 @@ class AdminUserIntegrationTest {
 
     private static final AtomicInteger COUNTER = new AtomicInteger(0);
 
-    private String loginAndGetToken(String email, String password) throws Exception {
-        String response = mockMvc.perform(post("/api/auth/login")
+    // Logs in (cookies, not a Bearer token any more) and returns a RequestPostProcessor bundling
+    // the access_token + refresh_token cookies plus the X-XSRF-TOKEN header every state-changing
+    // request now needs -- apply with .with(...) instead of the old .header("Authorization", ...).
+    private RequestPostProcessor loginAndGetToken(String email, String password) throws Exception {
+        MvcResult loginResult = mockMvc.perform(post("/api/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"email":"%s","password":"%s"}
                                 """.formatted(email, password)))
                 .andExpect(status().isOk())
-                .andReturn()
-                .getResponse()
-                .getContentAsString();
-        return extractJsonValue(response, "\"accessToken\":\"", true);
+                .andReturn();
+        Cookie accessTokenCookie = loginResult.getResponse().getCookie("access_token");
+        Cookie refreshTokenCookie = loginResult.getResponse().getCookie("refresh_token");
+
+        Cookie xsrfCookie = mockMvc.perform(get("/api/auth/csrf").cookie(accessTokenCookie, refreshTokenCookie))
+                .andReturn().getResponse().getCookie("XSRF-TOKEN");
+
+        return request -> {
+            request.setCookies(accessTokenCookie, refreshTokenCookie, xsrfCookie);
+            request.addHeader("X-XSRF-TOKEN", xsrfCookie.getValue());
+            return request;
+        };
     }
 
     private String extractJsonValue(String json, String key, boolean quoted) {
@@ -75,15 +90,15 @@ class AdminUserIntegrationTest {
         return json.substring(start, end);
     }
 
-    private String adminToken() throws Exception {
+    private RequestPostProcessor adminToken() throws Exception {
         return loginAndGetToken("admin@example.com", "Password123");
     }
 
-    private String managerToken() throws Exception {
+    private RequestPostProcessor managerToken() throws Exception {
         return loginAndGetToken("manager@example.com", "Password123");
     }
 
-    private String memberToken() throws Exception {
+    private RequestPostProcessor memberToken() throws Exception {
         return loginAndGetToken("member@example.com", "Password123");
     }
 
@@ -95,7 +110,7 @@ class AdminUserIntegrationTest {
     // This helper stands in for "an active account with this role exists" via a direct insert, the
     // same bridge used in AuthIntegrationTest and DashboardFixtureIntegrationTest. The adminToken
     // parameter is kept (unused) so every existing call site in this file needed no other change.
-    private Long createUser(String adminToken, String name, String email, String role) {
+    private Long createUser(RequestPostProcessor adminToken, String name, String email, String role) {
         Long roleId = jdbcTemplate.queryForObject(
                 "SELECT id FROM roles WHERE name = ?", Long.class, role);
         return jdbcTemplate.queryForObject("""
@@ -111,33 +126,33 @@ class AdminUserIntegrationTest {
 
     @Test
     void teamMemberGetsForbiddenOnEveryAdminEndpoint() throws Exception {
-        String token = memberToken();
+        RequestPostProcessor token = memberToken();
         for (String url : GET_ENDPOINTS) {
-            mockMvc.perform(get(url).header("Authorization", "Bearer " + token))
+            mockMvc.perform(get(url).with(token))
                     .andExpect(status().isForbidden());
         }
-        mockMvc.perform(put("/api/admin/users/1").header("Authorization", "Bearer " + token)
+        mockMvc.perform(put("/api/admin/users/1").with(token)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"name\":\"X\",\"email\":\"x@example.com\"}"))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(patch("/api/admin/users/1/role").header("Authorization", "Bearer " + token)
+        mockMvc.perform(patch("/api/admin/users/1/role").with(token)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"role\":\"MANAGER\"}"))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(delete("/api/admin/users/1").header("Authorization", "Bearer " + token))
+        mockMvc.perform(delete("/api/admin/users/1").with(token))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(patch("/api/admin/users/1/activate").header("Authorization", "Bearer " + token))
+        mockMvc.perform(patch("/api/admin/users/1/activate").with(token))
                 .andExpect(status().isForbidden());
     }
 
     @Test
     void managerGetsForbiddenOnEveryAdminEndpoint() throws Exception {
-        String token = managerToken();
+        RequestPostProcessor token = managerToken();
         for (String url : GET_ENDPOINTS) {
-            mockMvc.perform(get(url).header("Authorization", "Bearer " + token))
+            mockMvc.perform(get(url).with(token))
                     .andExpect(status().isForbidden());
         }
-        mockMvc.perform(put("/api/admin/users/1").header("Authorization", "Bearer " + token)
+        mockMvc.perform(put("/api/admin/users/1").with(token)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"name\":\"X\",\"email\":\"x@example.com\"}"))
                 .andExpect(status().isForbidden());
@@ -156,10 +171,10 @@ class AdminUserIntegrationTest {
 
     @Test
     void adminSucceedsOnListAndDetail() throws Exception {
-        String token = adminToken();
-        mockMvc.perform(get("/api/admin/users").header("Authorization", "Bearer " + token))
+        RequestPostProcessor token = adminToken();
+        mockMvc.perform(get("/api/admin/users").with(token))
                 .andExpect(status().isOk());
-        mockMvc.perform(get("/api/admin/users/1").header("Authorization", "Bearer " + token))
+        mockMvc.perform(get("/api/admin/users/1").with(token))
                 .andExpect(status().isOk());
     }
 
@@ -167,14 +182,14 @@ class AdminUserIntegrationTest {
 
     @Test
     void adminChangingOwnRoleReturnsConflict() throws Exception {
-        String token = adminToken();
+        RequestPostProcessor token = adminToken();
         Long selfId = Long.valueOf(extractJsonValue(
-                mockMvc.perform(get("/api/auth/me").header("Authorization", "Bearer " + token))
+                mockMvc.perform(get("/api/auth/me").with(token))
                         .andReturn().getResponse().getContentAsString(),
                 "\"id\":", false));
 
         mockMvc.perform(patch("/api/admin/users/" + selfId + "/role")
-                        .header("Authorization", "Bearer " + token)
+                        .with(token)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"role\":\"MANAGER\"}"))
                 .andExpect(status().isConflict());
@@ -182,30 +197,30 @@ class AdminUserIntegrationTest {
 
     @Test
     void adminDeactivatingSelfReturnsConflict() throws Exception {
-        String token = adminToken();
+        RequestPostProcessor token = adminToken();
         Long selfId = Long.valueOf(extractJsonValue(
-                mockMvc.perform(get("/api/auth/me").header("Authorization", "Bearer " + token))
+                mockMvc.perform(get("/api/auth/me").with(token))
                         .andReturn().getResponse().getContentAsString(),
                 "\"id\":", false));
 
-        mockMvc.perform(delete("/api/admin/users/" + selfId).header("Authorization", "Bearer " + token))
+        mockMvc.perform(delete("/api/admin/users/" + selfId).with(token))
                 .andExpect(status().isConflict());
     }
 
     @Test
     void demotingTheLastActiveAdminReturnsConflict() throws Exception {
-        String adminToken = adminToken();
+        RequestPostProcessor adminToken = adminToken();
         // Solo admin scenario is only reachable by the sole remaining admin acting on themselves,
         // since @PreAuthorize("hasRole('ADMIN')") means only an active admin can call this endpoint
         // at all -- so this necessarily exercises the same call path as the self-guard test, and
         // both guards independently return 409 for it.
         Long selfId = Long.valueOf(extractJsonValue(
-                mockMvc.perform(get("/api/auth/me").header("Authorization", "Bearer " + adminToken))
+                mockMvc.perform(get("/api/auth/me").with(adminToken))
                         .andReturn().getResponse().getContentAsString(),
                 "\"id\":", false));
 
         mockMvc.perform(patch("/api/admin/users/" + selfId + "/role")
-                        .header("Authorization", "Bearer " + adminToken)
+                        .with(adminToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"role\":\"TEAM_MEMBER\"}"))
                 .andExpect(status().isConflict());
@@ -213,23 +228,23 @@ class AdminUserIntegrationTest {
 
     @Test
     void deactivatingTheLastActiveAdminReturnsConflict() throws Exception {
-        String adminToken = adminToken();
+        RequestPostProcessor adminToken = adminToken();
         Long selfId = Long.valueOf(extractJsonValue(
-                mockMvc.perform(get("/api/auth/me").header("Authorization", "Bearer " + adminToken))
+                mockMvc.perform(get("/api/auth/me").with(adminToken))
                         .andReturn().getResponse().getContentAsString(),
                 "\"id\":", false));
 
-        mockMvc.perform(delete("/api/admin/users/" + selfId).header("Authorization", "Bearer " + adminToken))
+        mockMvc.perform(delete("/api/admin/users/" + selfId).with(adminToken))
                 .andExpect(status().isConflict());
     }
 
     @Test
     void withTwoActiveAdminsDemotingOneSucceeds() throws Exception {
-        String adminToken = adminToken();
+        RequestPostProcessor adminToken = adminToken();
         Long secondAdminId = createUser(adminToken, "Second Admin", uniqueEmail("second-admin"), "ADMIN");
 
         mockMvc.perform(patch("/api/admin/users/" + secondAdminId + "/role")
-                        .header("Authorization", "Bearer " + adminToken)
+                        .with(adminToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"role\":\"MANAGER\"}"))
                 .andExpect(status().isOk());
@@ -242,28 +257,28 @@ class AdminUserIntegrationTest {
 
     @Test
     void noResponseBodyContainsAPasswordField() throws Exception {
-        String adminToken = adminToken();
+        RequestPostProcessor adminToken = adminToken();
         String email = uniqueEmail("no-echo");
         Long id = createUser(adminToken, "No Echo", email, "TEAM_MEMBER");
 
         String listResponse = mockMvc.perform(get("/api/admin/users?search=" + email)
-                        .header("Authorization", "Bearer " + adminToken))
+                        .with(adminToken))
                 .andReturn().getResponse().getContentAsString();
         assertThat(listResponse.toLowerCase()).doesNotContain("\"password\"");
 
         String detailResponse = mockMvc.perform(get("/api/admin/users/" + id)
-                        .header("Authorization", "Bearer " + adminToken))
+                        .with(adminToken))
                 .andReturn().getResponse().getContentAsString();
         assertThat(detailResponse.toLowerCase()).doesNotContain("\"password\"");
     }
 
     @Test
     void deleteSetsActiveFalseAndRowStillExists() throws Exception {
-        String adminToken = adminToken();
+        RequestPostProcessor adminToken = adminToken();
         String email = uniqueEmail("soft-delete");
         Long id = createUser(adminToken, "Soft Delete", email, "TEAM_MEMBER");
 
-        mockMvc.perform(delete("/api/admin/users/" + id).header("Authorization", "Bearer " + adminToken))
+        mockMvc.perform(delete("/api/admin/users/" + id).with(adminToken))
                 .andExpect(status().isNoContent());
 
         Integer rowCount = jdbcTemplate.queryForObject(
@@ -277,22 +292,22 @@ class AdminUserIntegrationTest {
 
     @Test
     void deactivatedUsersExistingReportsAreStillVisibleToManager() throws Exception {
-        String adminToken = adminToken();
-        String managerToken = managerToken();
+        RequestPostProcessor adminToken = adminToken();
+        RequestPostProcessor managerToken = managerToken();
         String email = uniqueEmail("report-owner");
         Long memberId = createUser(adminToken, "Report Owner", email, "TEAM_MEMBER");
-        String memberToken = loginAndGetToken(email, "Password123");
+        RequestPostProcessor memberToken = loginAndGetToken(email, "Password123");
 
         // Project 1 is already active with member assignment allowed (see V16 seed) -- reuse it
         // rather than standing up a fresh project just to attach one report to it.
         mockMvc.perform(post("/api/projects/1/members")
-                        .header("Authorization", "Bearer " + managerToken)
+                        .with(managerToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"userId\":" + memberId + "}"))
                 .andExpect(status().isCreated());
 
         String reportResponse = mockMvc.perform(post("/api/reports")
-                        .header("Authorization", "Bearer " + memberToken)
+                        .with(memberToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"projectId":1,"weekStartDate":"2031-03-03","weekEndDate":"2031-03-09",
@@ -305,17 +320,17 @@ class AdminUserIntegrationTest {
                 .andReturn().getResponse().getContentAsString();
         Long reportId = Long.valueOf(extractJsonValue(reportResponse, "\"id\":", false));
 
-        mockMvc.perform(delete("/api/admin/users/" + memberId).header("Authorization", "Bearer " + adminToken))
+        mockMvc.perform(delete("/api/admin/users/" + memberId).with(adminToken))
                 .andExpect(status().isNoContent());
 
         String managerViewResponse = mockMvc.perform(get("/api/manager/reports/" + reportId)
-                        .header("Authorization", "Bearer " + managerToken))
+                        .with(managerToken))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         assertThat(managerViewResponse).contains("Visible after deactivation");
 
         String teamReportsResponse = mockMvc.perform(get("/api/manager/reports?userId=" + memberId)
-                        .header("Authorization", "Bearer " + managerToken))
+                        .with(managerToken))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         assertThat(extractJsonValue(teamReportsResponse, "\"totalElements\":", false)).isEqualTo("1");
@@ -323,40 +338,40 @@ class AdminUserIntegrationTest {
 
     @Test
     void deactivatedUsersValidTokenReturnsUnauthorizedOnNextRequest() throws Exception {
-        String adminToken = adminToken();
+        RequestPostProcessor adminToken = adminToken();
         String email = uniqueEmail("token-kill");
         createUser(adminToken, "Token Kill", email, "TEAM_MEMBER");
 
-        String victimToken = loginAndGetToken(email, "Password123");
-        mockMvc.perform(get("/api/auth/me").header("Authorization", "Bearer " + victimToken))
+        RequestPostProcessor victimToken = loginAndGetToken(email, "Password123");
+        mockMvc.perform(get("/api/auth/me").with(victimToken))
                 .andExpect(status().isOk());
 
         Long id = Long.valueOf(extractJsonValue(
                 mockMvc.perform(get("/api/admin/users?search=" + email)
-                                .header("Authorization", "Bearer " + adminToken))
+                                .with(adminToken))
                         .andReturn().getResponse().getContentAsString(),
                 "\"id\":", false));
-        mockMvc.perform(delete("/api/admin/users/" + id).header("Authorization", "Bearer " + adminToken))
+        mockMvc.perform(delete("/api/admin/users/" + id).with(adminToken))
                 .andExpect(status().isNoContent());
 
-        mockMvc.perform(get("/api/auth/me").header("Authorization", "Bearer " + victimToken))
+        mockMvc.perform(get("/api/auth/me").with(victimToken))
                 .andExpect(status().isUnauthorized());
     }
 
     @Test
     void activateRestoresLogin() throws Exception {
-        String adminToken = adminToken();
+        RequestPostProcessor adminToken = adminToken();
         String email = uniqueEmail("reactivate");
         Long id = createUser(adminToken, "Reactivate Me", email, "TEAM_MEMBER");
 
-        mockMvc.perform(delete("/api/admin/users/" + id).header("Authorization", "Bearer " + adminToken))
+        mockMvc.perform(delete("/api/admin/users/" + id).with(adminToken))
                 .andExpect(status().isNoContent());
         mockMvc.perform(post("/api/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"email\":\"%s\",\"password\":\"Password123\"}".formatted(email)))
                 .andExpect(status().isUnauthorized());
 
-        mockMvc.perform(patch("/api/admin/users/" + id + "/activate").header("Authorization", "Bearer " + adminToken))
+        mockMvc.perform(patch("/api/admin/users/" + id + "/activate").with(adminToken))
                 .andExpect(status().isOk());
         mockMvc.perform(post("/api/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -370,13 +385,13 @@ class AdminUserIntegrationTest {
 
     @Test
     void userListSearchAndRoleFiltersReturnTheRightSubsets() throws Exception {
-        String adminToken = adminToken();
+        RequestPostProcessor adminToken = adminToken();
         String marker = "srch" + System.nanoTime();
         createUser(adminToken, "Filter Manager", marker + "-mgr@example.com", "MANAGER");
         createUser(adminToken, "Filter Member", marker + "-mem@example.com", "TEAM_MEMBER");
 
         String searchResponse = mockMvc.perform(get("/api/admin/users?search=" + marker)
-                        .header("Authorization", "Bearer " + adminToken))
+                        .with(adminToken))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         assertThat(searchResponse).contains(marker + "-mgr@example.com");
@@ -385,7 +400,7 @@ class AdminUserIntegrationTest {
 
         String roleFilteredResponse = mockMvc.perform(
                         get("/api/admin/users?search=" + marker + "&role=MANAGER")
-                                .header("Authorization", "Bearer " + adminToken))
+                                .with(adminToken))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         assertThat(roleFilteredResponse).contains(marker + "-mgr@example.com");

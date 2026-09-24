@@ -16,5 +16,12 @@ services:
       timeout: 5s
       retries: 5
 
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: weekly-report-mailpit
+    ports:
+      - "1025:1025" # SMTP -- the dev profile's spring.mail.host/port point here
+      - "8025:8025" # Web UI -- open http://localhost:8025 to read invitation/reset emails
+
 volumes:
   postgres_data:

@@ -19,6 +19,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -27,6 +29,8 @@ import org.testcontainers.utility.DockerImageName;
 import com.weeklyreportgenerator.backend.entity.Project;
 import com.weeklyreportgenerator.backend.entity.enums.ProjectStatus;
 import com.weeklyreportgenerator.backend.repository.ProjectRepository;
+
+import jakarta.servlet.http.Cookie;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.MOCK)
 @AutoConfigureMockMvc
@@ -54,18 +58,27 @@ class ProjectIntegrationTest {
                 """.formatted(name, description);
     }
 
-    private String loginAndGetToken(String email, String password) throws Exception {
-        String response = mockMvc.perform(post("/api/auth/login")
+    // Logs in (cookies, not a Bearer token) and returns a RequestPostProcessor bundling the
+    // access_token + refresh_token cookies plus the X-XSRF-TOKEN header -- apply with .with(...).
+    private RequestPostProcessor loginAndGetToken(String email, String password) throws Exception {
+        MvcResult loginResult = mockMvc.perform(post("/api/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"email":"%s","password":"%s"}
                                 """.formatted(email, password)))
                 .andExpect(status().isOk())
-                .andReturn()
-                .getResponse()
-                .getContentAsString();
+                .andReturn();
+        Cookie accessTokenCookie = loginResult.getResponse().getCookie("access_token");
+        Cookie refreshTokenCookie = loginResult.getResponse().getCookie("refresh_token");
 
-        return extractJsonStringValue(response, "\"accessToken\":\"");
+        Cookie xsrfCookie = mockMvc.perform(get("/api/auth/csrf").cookie(accessTokenCookie, refreshTokenCookie))
+                .andReturn().getResponse().getCookie("XSRF-TOKEN");
+
+        return request -> {
+            request.setCookies(accessTokenCookie, refreshTokenCookie, xsrfCookie);
+            request.addHeader("X-XSRF-TOKEN", xsrfCookie.getValue());
+            return request;
+        };
     }
 
     private Long loginAndGetUserId(String email, String password) throws Exception {
@@ -98,9 +111,9 @@ class ProjectIntegrationTest {
         return json.substring(start, end);
     }
 
-    private Long createProjectAsManager(String managerToken, String name) throws Exception {
+    private Long createProjectAsManager(RequestPostProcessor managerToken, String name) throws Exception {
         String response = mockMvc.perform(post("/api/projects")
-                        .header("Authorization", "Bearer " + managerToken)
+                        .with(managerToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(projectBody(name, "Created for tests")))
                 .andExpect(status().isCreated())
@@ -113,18 +126,18 @@ class ProjectIntegrationTest {
 
     @Test
     void teamMemberGets200OnListProjects() throws Exception {
-        String token = loginAndGetToken("member@example.com", "Password123");
+        RequestPostProcessor token = loginAndGetToken("member@example.com", "Password123");
 
-        mockMvc.perform(get("/api/projects").header("Authorization", "Bearer " + token))
+        mockMvc.perform(get("/api/projects").with(token))
                 .andExpect(status().isOk());
     }
 
     @Test
     void teamMemberGets403OnCreateProject() throws Exception {
-        String token = loginAndGetToken("member@example.com", "Password123");
+        RequestPostProcessor token = loginAndGetToken("member@example.com", "Password123");
 
         mockMvc.perform(post("/api/projects")
-                        .header("Authorization", "Bearer " + token)
+                        .with(token)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(projectBody(uniqueName("forbidden-create"), "desc")))
                 .andExpect(status().isForbidden())
@@ -134,12 +147,12 @@ class ProjectIntegrationTest {
 
     @Test
     void teamMemberGets403OnUpdateProject() throws Exception {
-        String managerToken = loginAndGetToken("manager@example.com", "Password123");
-        String memberToken = loginAndGetToken("member@example.com", "Password123");
+        RequestPostProcessor managerToken = loginAndGetToken("manager@example.com", "Password123");
+        RequestPostProcessor memberToken = loginAndGetToken("member@example.com", "Password123");
         Long projectId = createProjectAsManager(managerToken, uniqueName("forbidden-update"));
 
         mockMvc.perform(put("/api/projects/" + projectId)
-                        .header("Authorization", "Bearer " + memberToken)
+                        .with(memberToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(projectBody(uniqueName("forbidden-update-renamed"), "desc")))
                 .andExpect(status().isForbidden());
@@ -147,21 +160,21 @@ class ProjectIntegrationTest {
 
     @Test
     void teamMemberGets403OnDeleteProject() throws Exception {
-        String managerToken = loginAndGetToken("manager@example.com", "Password123");
-        String memberToken = loginAndGetToken("member@example.com", "Password123");
+        RequestPostProcessor managerToken = loginAndGetToken("manager@example.com", "Password123");
+        RequestPostProcessor memberToken = loginAndGetToken("member@example.com", "Password123");
         Long projectId = createProjectAsManager(managerToken, uniqueName("forbidden-delete"));
 
         mockMvc.perform(delete("/api/projects/" + projectId)
-                        .header("Authorization", "Bearer " + memberToken))
+                        .with(memberToken))
                 .andExpect(status().isForbidden());
     }
 
     @Test
     void managerGets201OnCreateProject() throws Exception {
-        String managerToken = loginAndGetToken("manager@example.com", "Password123");
+        RequestPostProcessor managerToken = loginAndGetToken("manager@example.com", "Password123");
 
         mockMvc.perform(post("/api/projects")
-                        .header("Authorization", "Bearer " + managerToken)
+                        .with(managerToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(projectBody(uniqueName("manager-create"), "desc")))
                 .andExpect(status().isCreated())
@@ -171,12 +184,12 @@ class ProjectIntegrationTest {
 
     @Test
     void duplicateProjectNameReturns409() throws Exception {
-        String managerToken = loginAndGetToken("manager@example.com", "Password123");
+        RequestPostProcessor managerToken = loginAndGetToken("manager@example.com", "Password123");
         String name = uniqueName("duplicate");
         createProjectAsManager(managerToken, name);
 
         mockMvc.perform(post("/api/projects")
-                        .header("Authorization", "Bearer " + managerToken)
+                        .with(managerToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(projectBody(name.toUpperCase(), "another desc")))
                 .andExpect(status().isConflict())
@@ -186,9 +199,9 @@ class ProjectIntegrationTest {
 
     @Test
     void unknownProjectIdReturns404() throws Exception {
-        String token = loginAndGetToken("member@example.com", "Password123");
+        RequestPostProcessor token = loginAndGetToken("member@example.com", "Password123");
 
-        mockMvc.perform(get("/api/projects/999999999").header("Authorization", "Bearer " + token))
+        mockMvc.perform(get("/api/projects/999999999").with(token))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.status", is(404)))
                 .andExpect(jsonPath("$.error", is("NOT_FOUND")));
@@ -196,11 +209,11 @@ class ProjectIntegrationTest {
 
     @Test
     void deleteReturns204AndRowStillExistsAsInactive() throws Exception {
-        String managerToken = loginAndGetToken("manager@example.com", "Password123");
+        RequestPostProcessor managerToken = loginAndGetToken("manager@example.com", "Password123");
         Long projectId = createProjectAsManager(managerToken, uniqueName("soft-delete"));
 
         mockMvc.perform(delete("/api/projects/" + projectId)
-                        .header("Authorization", "Bearer " + managerToken))
+                        .with(managerToken))
                 .andExpect(status().isNoContent());
 
         Project project = projectRepository.findById(projectId).orElseThrow();
@@ -209,20 +222,20 @@ class ProjectIntegrationTest {
 
     @Test
     void assigningSameUserTwiceReturns409() throws Exception {
-        String managerToken = loginAndGetToken("manager@example.com", "Password123");
+        RequestPostProcessor managerToken = loginAndGetToken("manager@example.com", "Password123");
         Long projectId = createProjectAsManager(managerToken, uniqueName("assign-twice"));
         Long memberUserId = loginAndGetUserId("member@example.com", "Password123");
 
         String assignBody = "{\"userId\":" + memberUserId + "}";
 
         mockMvc.perform(post("/api/projects/" + projectId + "/members")
-                        .header("Authorization", "Bearer " + managerToken)
+                        .with(managerToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(assignBody))
                 .andExpect(status().isCreated());
 
         mockMvc.perform(post("/api/projects/" + projectId + "/members")
-                        .header("Authorization", "Bearer " + managerToken)
+                        .with(managerToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(assignBody))
                 .andExpect(status().isConflict())

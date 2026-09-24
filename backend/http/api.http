@@ -1,0 +1,359 @@
+### Weekly Report Generator -- API request collection
+### JetBrains HTTP Client format (IntelliJ IDEA / WebStorm "Run" gutter icons, or the `ijhttp` CLI).
+### Also readable as plain request text by VS Code's REST Client extension, EXCEPT the response
+### handler scripts ("> {% ... %}") used below to capture the XSRF-TOKEN cookie -- those are a
+### JetBrains-only feature. Run this file's requests top to bottom within one environment; IntelliJ's
+### HTTP Client keeps a cookie jar per environment automatically, so access_token/refresh_token set
+### by Login are sent on every later request with no extra work. The one thing that ISN'T automatic
+### is the X-XSRF-TOKEN header CSRF requires on state-changing calls -- that's what the response
+### handler after "Get CSRF Token" captures into {{xsrf}}.
+###
+### Select the "dev" environment (http-client.env.json) before running anything here.
+
+
+### =====================================================================================
+### 1. Authentication
+### =====================================================================================
+
+### Login as admin -- sets access_token + refresh_token httpOnly cookies. No token in the body.
+# @name login
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "admin@example.com",
+  "password": "Password123"
+}
+
+
+### Get the CSRF cookie + capture it into {{xsrf}} for every state-changing request below.
+# @name csrf
+GET {{baseUrl}}/api/auth/csrf
+
+> {%
+    const setCookie = response.headers.valueOf("Set-Cookie") || "";
+    const match = setCookie.match(/XSRF-TOKEN=([^;]+)/);
+    if (match) {
+        client.global.set("xsrf", match[1]);
+    }
+%}
+
+
+### Current authenticated user (reads the access_token cookie).
+GET {{baseUrl}}/api/auth/me
+
+
+### An Authorization: Bearer header is ignored -- there is no header-based auth path any more.
+### Expect 401 even though this is a real, currently-valid JWT.
+GET {{baseUrl}}/api/auth/me
+Authorization: Bearer not-read-by-anything
+
+
+### Rotate the refresh token and get a fresh access token. Requires X-XSRF-TOKEN (CSRF-protected
+### even though it's in Spring Security's permitAll() list -- see docs/api-design.md Section 2).
+POST {{baseUrl}}/api/auth/refresh
+X-XSRF-TOKEN: {{xsrf}}
+
+
+### Log out -- revokes the current refresh token and clears both cookies.
+POST {{baseUrl}}/api/auth/logout
+X-XSRF-TOKEN: {{xsrf}}
+
+
+### Request a password reset email. Always 202 with the same body, known email or not.
+POST {{baseUrl}}/api/auth/forgot-password
+Content-Type: application/json
+
+{
+  "email": "member@example.com"
+}
+
+
+### Reset with a token from the emailed link (Mailpit at http://localhost:8025 in dev, or read
+### straight from the `password_reset_tokens` table's hash -- the raw token is never stored, so it
+### can only come from the actual email/link).
+POST {{baseUrl}}/api/auth/reset-password
+Content-Type: application/json
+
+{
+  "token": "paste-the-raw-token-from-the-emailed-link",
+  "newPassword": "NewPassword2"
+}
+
+
+### =====================================================================================
+### 2. Invitations
+### =====================================================================================
+
+### Create an invitation (admin only). 409 if an active account or pending invite already exists.
+# @name createInvitation
+POST {{baseUrl}}/api/admin/invitations
+Content-Type: application/json
+X-XSRF-TOKEN: {{xsrf}}
+
+{
+  "email": "newhire@example.com",
+  "role": "TEAM_MEMBER"
+}
+
+
+### List invitations (admin only), optionally filtered by status.
+GET {{baseUrl}}/api/admin/invitations?status=PENDING&page=0&size=10
+
+
+### Resend -- rotates the token, invalidating the previous link.
+POST {{baseUrl}}/api/admin/invitations/1/resend
+X-XSRF-TOKEN: {{xsrf}}
+
+
+### Revoke -- the token becomes permanently unusable.
+DELETE {{baseUrl}}/api/admin/invitations/1
+X-XSRF-TOKEN: {{xsrf}}
+
+
+### Validate an invitation token (anonymous, CSRF-exempt) -- what the accept-invitation page calls
+### first to show who's being invited.
+POST {{baseUrl}}/api/invitations/validate
+Content-Type: application/json
+
+{
+  "token": "paste-the-raw-token-from-the-emailed-link"
+}
+
+
+### Accept an invitation (anonymous, CSRF-exempt) -- creates the account with the role fixed by the
+### invitation itself.
+POST {{baseUrl}}/api/invitations/accept
+Content-Type: application/json
+
+{
+  "token": "paste-the-raw-token-from-the-emailed-link",
+  "name": "New Hire",
+  "password": "Password123"
+}
+
+
+### =====================================================================================
+### 3. Admin -- User Management
+### =====================================================================================
+
+GET {{baseUrl}}/api/admin/users?page=0&size=10
+
+###
+GET {{baseUrl}}/api/admin/users/1
+
+###
+PUT {{baseUrl}}/api/admin/users/1
+Content-Type: application/json
+X-XSRF-TOKEN: {{xsrf}}
+
+{
+  "name": "Updated Name",
+  "email": "updated@example.com"
+}
+
+### Change role.
+PATCH {{baseUrl}}/api/admin/users/1/role
+Content-Type: application/json
+X-XSRF-TOKEN: {{xsrf}}
+
+{
+  "role": "MANAGER"
+}
+
+### Deactivate (soft delete) -- also revokes every refresh token this user is holding.
+DELETE {{baseUrl}}/api/admin/users/1
+X-XSRF-TOKEN: {{xsrf}}
+
+### Reactivate.
+PATCH {{baseUrl}}/api/admin/users/1/activate
+X-XSRF-TOKEN: {{xsrf}}
+
+### Trigger a password-reset email for this user (admin never sets/sees the new password).
+POST {{baseUrl}}/api/admin/users/1/send-password-reset
+X-XSRF-TOKEN: {{xsrf}}
+
+
+### =====================================================================================
+### 4. Projects
+### =====================================================================================
+
+GET {{baseUrl}}/api/projects
+
+###
+# @name createProject
+POST {{baseUrl}}/api/projects
+Content-Type: application/json
+X-XSRF-TOKEN: {{xsrf}}
+
+{
+  "name": "Internal Platform",
+  "description": "Internal engineering project"
+}
+
+###
+GET {{baseUrl}}/api/projects/1
+
+###
+PUT {{baseUrl}}/api/projects/1
+Content-Type: application/json
+X-XSRF-TOKEN: {{xsrf}}
+
+{
+  "name": "Internal Platform (renamed)",
+  "description": "Internal engineering project"
+}
+
+###
+DELETE {{baseUrl}}/api/projects/1
+X-XSRF-TOKEN: {{xsrf}}
+
+### Assign a team member.
+POST {{baseUrl}}/api/projects/1/members
+Content-Type: application/json
+X-XSRF-TOKEN: {{xsrf}}
+
+{
+  "userId": 4
+}
+
+
+### =====================================================================================
+### 5. Weekly Reports
+### =====================================================================================
+
+### Create a draft.
+# @name createReport
+POST {{baseUrl}}/api/reports
+Content-Type: application/json
+X-XSRF-TOKEN: {{xsrf}}
+
+{
+  "projectId": 1,
+  "weekStartDate": "2026-09-21",
+  "weekEndDate": "2026-09-27",
+  "summary": "Sample report created from the .http collection",
+  "tasks": [
+    {
+      "taskName": "Sample task",
+      "status": "COMPLETED",
+      "priority": "HIGH",
+      "plannedPercentage": 100,
+      "actualPercentage": 100,
+      "hoursPlanned": 8,
+      "hoursSpent": 8
+    }
+  ]
+}
+
+### My reports.
+GET {{baseUrl}}/api/reports/my?page=0&size=10
+
+### Single report.
+GET {{baseUrl}}/api/reports/1
+
+### Update (DRAFT or NEEDS_CORRECTION only).
+PUT {{baseUrl}}/api/reports/1
+Content-Type: application/json
+X-XSRF-TOKEN: {{xsrf}}
+
+{
+  "projectId": 1,
+  "weekStartDate": "2026-09-21",
+  "weekEndDate": "2026-09-27",
+  "summary": "Updated summary",
+  "tasks": [
+    {
+      "taskName": "Sample task",
+      "status": "COMPLETED",
+      "priority": "HIGH",
+      "plannedPercentage": 100,
+      "actualPercentage": 100,
+      "hoursPlanned": 8,
+      "hoursSpent": 8
+    }
+  ]
+}
+
+### Submit for review.
+POST {{baseUrl}}/api/reports/1/submit
+X-XSRF-TOKEN: {{xsrf}}
+
+### Delete a draft.
+DELETE {{baseUrl}}/api/reports/1
+X-XSRF-TOKEN: {{xsrf}}
+
+### Version/review history.
+GET {{baseUrl}}/api/reports/1/history
+
+
+### =====================================================================================
+### 6. Manager Review
+### =====================================================================================
+
+GET {{baseUrl}}/api/manager/reports?status=SUBMITTED&page=0&size=10
+
+###
+GET {{baseUrl}}/api/manager/reports/1
+
+###
+POST {{baseUrl}}/api/manager/reports/1/approve
+Content-Type: application/json
+X-XSRF-TOKEN: {{xsrf}}
+
+{
+  "comment": "Good work. Approved."
+}
+
+###
+POST {{baseUrl}}/api/manager/reports/1/request-changes
+Content-Type: application/json
+X-XSRF-TOKEN: {{xsrf}}
+
+{
+  "comment": "Please add more details about testing."
+}
+
+###
+GET {{baseUrl}}/api/manager/team-members?page=0&size=10
+
+
+### =====================================================================================
+### 7. Dashboard
+### =====================================================================================
+
+GET {{baseUrl}}/api/dashboard/summary
+
+###
+GET {{baseUrl}}/api/dashboard/task-trends
+
+###
+GET {{baseUrl}}/api/dashboard/status-summary
+
+###
+GET {{baseUrl}}/api/dashboard/workload
+
+###
+GET {{baseUrl}}/api/dashboard/time-distribution
+
+
+### =====================================================================================
+### 8. Rate limiting / lockout smoke tests (run manually, not part of the normal flow above)
+### =====================================================================================
+
+### Run this one 6 times in a row with a wrong password to see 401 x5 then 423 LOCKED.
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "manager@example.com",
+  "password": "WrongPassword1"
+}
+
+### Run this one 6+ times in under a minute to see 429 TOO_MANY_REQUESTS (default limit is 5/min).
+POST {{baseUrl}}/api/auth/forgot-password
+Content-Type: application/json
+
+{
+  "email": "nobody@example.com"
+}

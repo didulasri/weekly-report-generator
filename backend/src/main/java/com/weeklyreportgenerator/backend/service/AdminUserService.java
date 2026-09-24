@@ -40,6 +40,7 @@ public class AdminUserService {
     private final UserProjectRepository userProjectRepository;
     private final WeeklyReportRepository weeklyReportRepository;
     private final RoleRepository roleRepository;
+    private final RefreshTokenService refreshTokenService;
 
     @PreAuthorize("hasRole('ADMIN')")
     @Transactional(readOnly = true)
@@ -124,6 +125,11 @@ public class AdminUserService {
         user.setRole(role);
         user = userRepository.save(user);
 
+        // So the new (or lost) permissions take effect within the 15-minute access-token life,
+        // not the full 7-day refresh-token life -- the next /api/auth/refresh for this user fails
+        // and forces a fresh login, which re-reads the role from the DB via the JWT filter/login.
+        refreshTokenService.revokeAllForUser(id);
+
         long projectCount = userProjectRepository.findActiveWithProjectByUserId(id).size();
         long reportCount = weeklyReportRepository.countByStatusGroupedByUser(List.of(id)).stream()
                 .mapToLong(ReportStatusCount::getCnt).sum();
@@ -142,6 +148,7 @@ public class AdminUserService {
 
         user.setActive(false);
         userRepository.save(user);
+        refreshTokenService.revokeAllForUser(id);
     }
 
     @PreAuthorize("hasRole('ADMIN')")

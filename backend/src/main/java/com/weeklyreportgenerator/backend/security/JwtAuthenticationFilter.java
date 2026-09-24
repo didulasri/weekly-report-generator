@@ -10,20 +10,22 @@ import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
+import org.springframework.web.util.WebUtils;
 
 import io.jsonwebtoken.JwtException;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
+import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 
+// The only way in: the access token is read from the httpOnly access_token cookie. There is no
+// Authorization header support at all -- the browser never exposes the token to JavaScript, and a
+// non-browser API client authenticates the same way any browser tab does.
 @Component
 @RequiredArgsConstructor
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
-
-    private static final String AUTH_HEADER = "Authorization";
-    private static final String BEARER_PREFIX = "Bearer ";
 
     private final JwtService jwtService;
     private final UserDetailsService userDetailsService;
@@ -34,14 +36,14 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             @NonNull HttpServletResponse response,
             @NonNull FilterChain filterChain) throws ServletException, IOException {
 
-        String authHeader = request.getHeader(AUTH_HEADER);
+        Cookie accessTokenCookie = WebUtils.getCookie(request, AuthCookieService.ACCESS_TOKEN_COOKIE);
 
-        if (authHeader == null || !authHeader.startsWith(BEARER_PREFIX)) {
+        if (accessTokenCookie == null) {
             filterChain.doFilter(request, response);
             return;
         }
 
-        String token = authHeader.substring(BEARER_PREFIX.length());
+        String token = accessTokenCookie.getValue();
 
         try {
             String email = jwtService.extractEmail(token);

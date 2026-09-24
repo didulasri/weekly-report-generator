@@ -2,28 +2,34 @@ package com.weeklyreportgenerator.backend.exception;
 
 import java.time.LocalDateTime;
 
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.DisabledException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
-import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import com.weeklyreportgenerator.backend.dto.response.ErrorResponse;
+import com.weeklyreportgenerator.backend.security.AuthCookieService;
 
 import jakarta.servlet.http.HttpServletRequest;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
 @RestControllerAdvice
+@RequiredArgsConstructor
 public class GlobalExceptionHandler {
+
+    private final AuthCookieService authCookieService;
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ErrorResponse> handleValidation(MethodArgumentNotValidException ex, HttpServletRequest request) {
@@ -93,6 +99,11 @@ public class GlobalExceptionHandler {
         return build(HttpStatus.UNAUTHORIZED, "UNAUTHORIZED", "This account has been deactivated", request);
     }
 
+    @ExceptionHandler(AccountLockedException.class)
+    public ResponseEntity<ErrorResponse> handleAccountLocked(AccountLockedException ex, HttpServletRequest request) {
+        return build(HttpStatus.LOCKED, "LOCKED", ex.getMessage(), request);
+    }
+
     @ExceptionHandler(AccessDeniedException.class)
     public ResponseEntity<ErrorResponse> handleAccessDenied(AccessDeniedException ex, HttpServletRequest request) {
         return build(HttpStatus.FORBIDDEN, "FORBIDDEN", "You do not have permission to access this resource", request);
@@ -101,6 +112,35 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(ResourceNotFoundException.class)
     public ResponseEntity<ErrorResponse> handleNotFound(ResourceNotFoundException ex, HttpServletRequest request) {
         return build(HttpStatus.NOT_FOUND, "NOT_FOUND", ex.getMessage(), request);
+    }
+
+    @ExceptionHandler(InvitationInvalidException.class)
+    public ResponseEntity<ErrorResponse> handleInvitationInvalid(InvitationInvalidException ex, HttpServletRequest request) {
+        return build(HttpStatus.GONE, "GONE", ex.getMessage(), request);
+    }
+
+    @ExceptionHandler(PasswordResetTokenInvalidException.class)
+    public ResponseEntity<ErrorResponse> handlePasswordResetTokenInvalid(
+            PasswordResetTokenInvalidException ex, HttpServletRequest request) {
+        return build(HttpStatus.GONE, "GONE", ex.getMessage(), request);
+    }
+
+    // Unknown/expired/reused refresh token -- clears both cookies on the way out, since whatever
+    // the browser is holding is no longer usable and must not be sent again on the next request.
+    @ExceptionHandler(RefreshTokenInvalidException.class)
+    public ResponseEntity<ErrorResponse> handleRefreshTokenInvalid(
+            RefreshTokenInvalidException ex, HttpServletRequest request) {
+        ErrorResponse body = ErrorResponse.builder()
+                .timestamp(LocalDateTime.now())
+                .status(HttpStatus.UNAUTHORIZED.value())
+                .error("UNAUTHORIZED")
+                .message("Session expired -- please log in again")
+                .path(request.getRequestURI())
+                .build();
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .header(HttpHeaders.SET_COOKIE, authCookieService.clearedAccessTokenCookie().toString())
+                .header(HttpHeaders.SET_COOKIE, authCookieService.clearedRefreshTokenCookie().toString())
+                .body(body);
     }
 
     @ExceptionHandler(DuplicateResourceException.class)

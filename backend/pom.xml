@@ -54,6 +54,14 @@
 			<groupId>org.flywaydb</groupId>
 			<artifactId>flyway-database-postgresql</artifactId>
 		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-mail</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-thymeleaf</artifactId>
+		</dependency>
 
 		<dependency>
 			<groupId>org.postgresql</groupId>
@@ -66,6 +74,11 @@
 			<optional>true</optional>
 		</dependency>
 
+		<dependency>
+			<groupId>com.bucket4j</groupId>
+			<artifactId>bucket4j-core</artifactId>
+			<version>8.10.1</version>
+		</dependency>
 		<dependency>
 			<groupId>io.jsonwebtoken</groupId>
 			<artifactId>jjwt-api</artifactId>
@@ -126,6 +139,21 @@
 			<version>1.20.6</version>
 			<scope>test</scope>
 		</dependency>
+		<dependency>
+			<groupId>com.icegreen</groupId>
+			<artifactId>greenmail</artifactId>
+			<version>2.1.14</version>
+			<scope>test</scope>
+		</dependency>
+		<!-- Only needed because SmtpEmailServiceTest builds a plain (non-Spring) TemplateEngine,
+		     which defaults to Thymeleaf's OGNL-based StandardDialect. The app itself never needs
+		     this: Spring Boot's autoconfigured TemplateEngine bean uses SpringEL instead. -->
+		<dependency>
+			<groupId>ognl</groupId>
+			<artifactId>ognl</artifactId>
+			<version>3.3.4</version>
+			<scope>test</scope>
+		</dependency>
 	</dependencies>
 
 	<build>
@@ -169,6 +197,21 @@
 						</configuration>
 					</execution>
 				</executions>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-surefire-plugin</artifactId>
+				<configuration>
+					<!-- Integration tests share one JVM-wide, per-IP RateLimitFilter bucket across every
+					     test in a class (it's a real Spring bean, not per-test state), and a single
+					     class commonly logs in far more than the production default of 10/min. These
+					     env vars only take effect for the test JVM; the app.yml default and every other
+					     environment stay untouched. -->
+					<environmentVariables>
+						<LOGIN_RATE_LIMIT_PER_MINUTE>100000</LOGIN_RATE_LIMIT_PER_MINUTE>
+						<FORGOT_PASSWORD_RATE_LIMIT_PER_MINUTE>100000</FORGOT_PASSWORD_RATE_LIMIT_PER_MINUTE>
+					</environmentVariables>
+				</configuration>
 			</plugin>
 		</plugins>
 	</build>

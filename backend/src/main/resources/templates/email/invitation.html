@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8" />
+    <title>You're invited to Weekly Report Generator</title>
+</head>
+<body style="font-family: Arial, sans-serif; background-color: #f4f4f5; margin: 0; padding: 24px;">
+    <table role="presentation" width="100%" style="max-width: 480px; margin: 0 auto; background: #ffffff; border-radius: 8px; padding: 32px;">
+        <tr>
+            <td>
+                <h1 style="font-size: 20px; color: #1f2937; margin-top: 0;">You've been invited</h1>
+                <p style="color: #374151; font-size: 14px; line-height: 1.6;">
+                    <span th:text="${invitedByName}">An administrator</span> has invited you to join
+                    <strong>Weekly Report Generator</strong> as a
+                    <strong th:text="${recipientRole}">TEAM_MEMBER</strong>.
+                </p>
+                <p style="text-align: center; margin: 32px 0;">
+                    <a th:href="${invitationLink}"
+                       style="background-color: #2563eb; color: #ffffff; text-decoration: none; padding: 12px 24px; border-radius: 6px; font-size: 14px; display: inline-block;">
+                        Accept invitation
+                    </a>
+                </p>
+                <p style="color: #6b7280; font-size: 12px; line-height: 1.6;">
+                    Or copy this link into your browser:<br />
+                    <a th:href="${invitationLink}" th:text="${invitationLink}" style="color: #2563eb; word-break: break-all;">link</a>
+                </p>
+                <p style="color: #6b7280; font-size: 12px;">
+                    This invitation expires on <span th:text="${expiresAtDisplay}">a date</span>.
+                    If you weren't expecting this, you can safely ignore this email.
+                </p>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>

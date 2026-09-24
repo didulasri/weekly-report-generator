@@ -19,11 +19,14 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
+import jakarta.servlet.http.Cookie;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
@@ -53,18 +56,27 @@ class DashboardIntegrationTest {
         return BASE_MONDAY.plusWeeks(WEEK_OFFSET.getAndIncrement());
     }
 
-    private String loginAndGetToken(String email, String password) throws Exception {
-        String response = mockMvc.perform(post("/api/auth/login")
+    // Logs in (cookies, not a Bearer token) and returns a RequestPostProcessor bundling the
+    // access_token + refresh_token cookies plus the X-XSRF-TOKEN header -- apply with .with(...).
+    private RequestPostProcessor loginAndGetToken(String email, String password) throws Exception {
+        MvcResult loginResult = mockMvc.perform(post("/api/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"email":"%s","password":"%s"}
                                 """.formatted(email, password)))
                 .andExpect(status().isOk())
-                .andReturn()
-                .getResponse()
-                .getContentAsString();
+                .andReturn();
+        Cookie accessTokenCookie = loginResult.getResponse().getCookie("access_token");
+        Cookie refreshTokenCookie = loginResult.getResponse().getCookie("refresh_token");
 
-        return extractJsonStringValue(response, "\"accessToken\":\"");
+        Cookie xsrfCookie = mockMvc.perform(get("/api/auth/csrf").cookie(accessTokenCookie, refreshTokenCookie))
+                .andReturn().getResponse().getCookie("XSRF-TOKEN");
+
+        return request -> {
+            request.setCookies(accessTokenCookie, refreshTokenCookie, xsrfCookie);
+            request.addHeader("X-XSRF-TOKEN", xsrfCookie.getValue());
+            return request;
+        };
     }
 
     private String extractJsonStringValue(String json, String key) {
@@ -82,15 +94,15 @@ class DashboardIntegrationTest {
         return json.substring(start, end);
     }
 
-    private String memberToken() throws Exception {
+    private RequestPostProcessor memberToken() throws Exception {
         return loginAndGetToken("member@example.com", "Password123");
     }
 
-    private String managerToken() throws Exception {
+    private RequestPostProcessor managerToken() throws Exception {
         return loginAndGetToken("manager@example.com", "Password123");
     }
 
-    private Long createAndSubmitReport(String memberToken, LocalDate weekStart) throws Exception {
+    private Long createAndSubmitReport(RequestPostProcessor memberToken, LocalDate weekStart) throws Exception {
         String body = """
                 {"projectId":1,"weekStartDate":"%s","weekEndDate":"%s","summary":"Activity feed stability test",
                  "tasks":[{"taskName":"T1","status":"COMPLETED","priority":"HIGH","plannedPercentage":100,
@@ -98,7 +110,7 @@ class DashboardIntegrationTest {
                 """.formatted(weekStart, weekStart.plusDays(6));
 
         String response = mockMvc.perform(post("/api/reports")
-                        .header("Authorization", "Bearer " + memberToken)
+                        .with(memberToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isCreated())
@@ -107,7 +119,7 @@ class DashboardIntegrationTest {
                 .getContentAsString();
         Long reportId = Long.valueOf(extractJsonStringValue(response, "\"id\":"));
 
-        mockMvc.perform(post("/api/reports/" + reportId + "/submit").header("Authorization", "Bearer " + memberToken))
+        mockMvc.perform(post("/api/reports/" + reportId + "/submit").with(memberToken))
                 .andExpect(status().isOk());
 
         return reportId;
@@ -115,14 +127,14 @@ class DashboardIntegrationTest {
 
     // Fetches every page of the activity feed (using the size the test asks for) and returns the
     // concatenated content, so the test can inspect the whole feed rather than one page in isolation.
-    private List<JsonNode> fetchAllPages(String token, int pageSize) throws Exception {
+    private List<JsonNode> fetchAllPages(RequestPostProcessor token, int pageSize) throws Exception {
         List<JsonNode> all = new ArrayList<>();
         int page = 0;
         while (true) {
             String response = mockMvc.perform(get("/api/dashboard/activity-feed")
                             .param("page", String.valueOf(page))
                             .param("size", String.valueOf(pageSize))
-                            .header("Authorization", "Bearer " + token))
+                            .with(token))
                     .andExpect(status().isOk())
                     .andReturn()
                     .getResponse()
@@ -145,14 +157,14 @@ class DashboardIntegrationTest {
     // it entirely between page 0 and page 1. event_type ASC, id DESC as tiebreakers fix that.
     @Test
     void activityFeedPaginationIsStableWhenRowsShareAnIdenticalTimestamp() throws Exception {
-        String memberToken = memberToken();
-        String managerToken = managerToken();
+        RequestPostProcessor memberToken = memberToken();
+        RequestPostProcessor managerToken = managerToken();
 
         Long reportA = createAndSubmitReport(memberToken, nextMonday());
         Long reportB = createAndSubmitReport(memberToken, nextMonday());
 
         mockMvc.perform(post("/api/manager/reports/" + reportA + "/approve")
-                        .header("Authorization", "Bearer " + managerToken)
+                        .with(managerToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"comment\":\"Stability test approval\"}"))
                 .andExpect(status().isOk());

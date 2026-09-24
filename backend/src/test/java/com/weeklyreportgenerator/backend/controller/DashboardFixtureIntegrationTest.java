@@ -23,12 +23,15 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
 import jakarta.persistence.EntityManagerFactory;
+import jakarta.servlet.http.Cookie;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
@@ -70,8 +73,27 @@ class DashboardFixtureIntegrationTest {
     private static final LocalDate WEEK_START = LocalDate.of(2020, 1, 6);
     private static final LocalDate EMPTY_WEEK = LocalDate.of(2099, 1, 5);
 
-    private String loginAndGetToken(String email, String password) throws Exception {
-        return extractJsonStringValue(loginRaw(email, password), "\"accessToken\":\"");
+    // Logs in (cookies, not a Bearer token) and returns a RequestPostProcessor bundling the
+    // access_token + refresh_token cookies plus the X-XSRF-TOKEN header -- apply with .with(...).
+    private RequestPostProcessor loginAndGetToken(String email, String password) throws Exception {
+        MvcResult loginResult = mockMvc.perform(post("/api/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"email":"%s","password":"%s"}
+                                """.formatted(email, password)))
+                .andExpect(status().isOk())
+                .andReturn();
+        Cookie accessTokenCookie = loginResult.getResponse().getCookie("access_token");
+        Cookie refreshTokenCookie = loginResult.getResponse().getCookie("refresh_token");
+
+        Cookie xsrfCookie = mockMvc.perform(get("/api/auth/csrf").cookie(accessTokenCookie, refreshTokenCookie))
+                .andReturn().getResponse().getCookie("XSRF-TOKEN");
+
+        return request -> {
+            request.setCookies(accessTokenCookie, refreshTokenCookie, xsrfCookie);
+            request.addHeader("X-XSRF-TOKEN", xsrfCookie.getValue());
+            return request;
+        };
     }
 
     private String loginRaw(String email, String password) throws Exception {
@@ -101,7 +123,7 @@ class DashboardFixtureIntegrationTest {
         return json.substring(start, end);
     }
 
-    private String managerToken() throws Exception {
+    private RequestPostProcessor managerToken() throws Exception {
         return loginAndGetToken("manager@example.com", "Password123");
     }
 
@@ -117,9 +139,9 @@ class DashboardFixtureIntegrationTest {
                 """, name, email, passwordEncoder.encode("Fixture123"), roleId);
     }
 
-    private Long createProject(String managerToken, String name) throws Exception {
+    private Long createProject(RequestPostProcessor managerToken, String name) throws Exception {
         String response = mockMvc.perform(post("/api/projects")
-                        .header("Authorization", "Bearer " + managerToken)
+                        .with(managerToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"name\":\"%s\"}".formatted(name)))
                 .andExpect(status().isCreated())
@@ -129,17 +151,17 @@ class DashboardFixtureIntegrationTest {
         return Long.valueOf(extractJsonStringValue(response, "\"id\":"));
     }
 
-    private void assignMember(String managerToken, Long projectId, Long userId) throws Exception {
+    private void assignMember(RequestPostProcessor managerToken, Long projectId, Long userId) throws Exception {
         mockMvc.perform(post("/api/projects/" + projectId + "/members")
-                        .header("Authorization", "Bearer " + managerToken)
+                        .with(managerToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"userId\":%d}".formatted(userId)))
                 .andExpect(status().isCreated());
     }
 
-    private Long createReport(String memberToken, Long projectId, String body) throws Exception {
+    private Long createReport(RequestPostProcessor memberToken, Long projectId, String body) throws Exception {
         String response = mockMvc.perform(post("/api/reports")
-                        .header("Authorization", "Bearer " + memberToken)
+                        .with(memberToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isCreated())
@@ -149,13 +171,13 @@ class DashboardFixtureIntegrationTest {
         return Long.valueOf(extractJsonStringValue(response, "\"id\":"));
     }
 
-    private void submit(String memberToken, Long reportId) throws Exception {
-        mockMvc.perform(post("/api/reports/" + reportId + "/submit").header("Authorization", "Bearer " + memberToken))
+    private void submit(RequestPostProcessor memberToken, Long reportId) throws Exception {
+        mockMvc.perform(post("/api/reports/" + reportId + "/submit").with(memberToken))
                 .andExpect(status().isOk());
     }
 
-    private JsonNode getJson(String url, String token) throws Exception {
-        String response = mockMvc.perform(get(url).header("Authorization", "Bearer " + token))
+    private JsonNode getJson(String url, RequestPostProcessor token) throws Exception {
+        String response = mockMvc.perform(get(url).with(token))
                 .andExpect(status().isOk())
                 .andReturn()
                 .getResponse()
@@ -165,7 +187,7 @@ class DashboardFixtureIntegrationTest {
 
     @Test
     void teamMemberForbiddenOnEveryDashboardEndpoint() throws Exception {
-        String memberToken = loginAndGetToken("member@example.com", "Password123");
+        RequestPostProcessor memberToken = loginAndGetToken("member@example.com", "Password123");
         List<String> endpoints = List.of(
                 "/api/dashboard/summary",
                 "/api/dashboard/status-summary",
@@ -176,7 +198,7 @@ class DashboardFixtureIntegrationTest {
                 "/api/dashboard/section-comparison?weekStart=2020-01-06&section=BLOCKERS");
 
         for (String endpoint : endpoints) {
-            mockMvc.perform(get(endpoint).header("Authorization", "Bearer " + memberToken))
+            mockMvc.perform(get(endpoint).with(memberToken))
                     .andExpect(status().isForbidden());
         }
     }
@@ -202,13 +224,13 @@ class DashboardFixtureIntegrationTest {
     // single digits, generously bounded at <10 so small legitimate additions don't make this flaky.
     @Test
     void summaryEndpointStaysWithinSingleDigitQueryCount() throws Exception {
-        String managerToken = managerToken();
+        RequestPostProcessor managerToken = managerToken();
         Statistics statistics = entityManagerFactory.unwrap(SessionFactory.class).getStatistics();
         statistics.setStatisticsEnabled(true);
         statistics.clear();
 
         mockMvc.perform(get("/api/dashboard/summary?weekStart=2020-01-06")
-                        .header("Authorization", "Bearer " + managerToken))
+                        .with(managerToken))
                 .andExpect(status().isOk());
 
         long queryCount = statistics.getQueryExecutionCount();
@@ -217,7 +239,7 @@ class DashboardFixtureIntegrationTest {
 
     @Test
     void complianceRateIsZeroNotDivideByZeroWhenNothingIsExpected() throws Exception {
-        String managerToken = managerToken();
+        RequestPostProcessor managerToken = managerToken();
         // A projectId with no assignments at all -> expected == 0.
         JsonNode summary = getJson(
                 "/api/dashboard/summary?weekStart=2020-01-06&projectId=999999", managerToken);
@@ -229,7 +251,7 @@ class DashboardFixtureIntegrationTest {
 
     @Test
     void emptyRangeReturnsZeroedOrEmptyResultsNeverNullNever500() throws Exception {
-        String managerToken = managerToken();
+        RequestPostProcessor managerToken = managerToken();
 
         JsonNode summary = getJson(
                 "/api/dashboard/summary?weekStart=" + EMPTY_WEEK + "&projectId=999999", managerToken);
@@ -257,14 +279,14 @@ class DashboardFixtureIntegrationTest {
 
     @Test
     void dashboardMetricsMatchDeterministicFixtureExactly() throws Exception {
-        String managerToken = managerToken();
+        RequestPostProcessor managerToken = managerToken();
 
         Long project1 = createProject(managerToken, "Fixture Project Alpha " + Instant.now().toEpochMilli());
         Long project2 = createProject(managerToken, "Fixture Project Beta " + Instant.now().toEpochMilli());
 
         String[] emails = new String[5];
         Long[] userIds = new Long[5];
-        String[] tokens = new String[5];
+        RequestPostProcessor[] tokens = new RequestPostProcessor[5];
         for (int i = 0; i < 5; i++) {
             emails[i] = "fixture" + (i + 1) + "-" + Instant.now().toEpochMilli() + "@example.com";
             register("Fixture Member " + (i + 1), emails[i]);
@@ -317,7 +339,7 @@ class DashboardFixtureIntegrationTest {
                 "UPDATE weekly_reports SET submitted_at = ? WHERE id = ?",
                 Timestamp.from(WEEK_START.plusDays(2).atStartOfDay(java.time.ZoneOffset.UTC).toInstant()), report3);
         mockMvc.perform(post("/api/manager/reports/" + report3 + "/approve")
-                        .header("Authorization", "Bearer " + managerToken)
+                        .with(managerToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"comment\":\"Approved\"}"))
                 .andExpect(status().isOk());
@@ -336,7 +358,7 @@ class DashboardFixtureIntegrationTest {
         Long report4 = createReport(tokens[3], project1, member4Body);
         submit(tokens[3], report4);
         mockMvc.perform(post("/api/manager/reports/" + report4 + "/request-changes")
-                        .header("Authorization", "Bearer " + managerToken)
+                        .with(managerToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"comment\":\"Please add more detail here please.\"}"))
                 .andExpect(status().isOk());

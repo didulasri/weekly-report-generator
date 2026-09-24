@@ -1,5 +1,7 @@
 package com.weeklyreportgenerator.backend.entity;
 
+import java.time.Instant;
+
 import com.fasterxml.jackson.annotation.JsonIgnore;
 
 import jakarta.persistence.Column;
@@ -40,4 +42,11 @@ public class User extends BaseEntity {
     @Builder.Default
     @Column(name = "active", nullable = false)
     private boolean active = true;
+
+    @Builder.Default
+    @Column(name = "failed_login_attempts", nullable = false)
+    private int failedLoginAttempts = 0;
+
+    @Column(name = "locked_until")
+    private Instant lockedUntil;
 }
