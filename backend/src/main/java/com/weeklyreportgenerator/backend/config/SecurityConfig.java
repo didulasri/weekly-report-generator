@@ -17,6 +17,7 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.security.web.authentication.session.NullAuthenticatedSessionStrategy;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
 import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter;
@@ -88,9 +89,25 @@ public class SecurityConfig {
                 // as X-XSRF-TOKEN on state-changing requests. withHttpOnlyFalse() is required for
                 // the SPA's JS to read it at all -- it is not the access/refresh token, so this is
                 // not the "browser never exposes tokens to JavaScript" rule being broken.
+                //
+                // .sessionAuthenticationStrategy(...) HERE (on the csrf() customizer, not
+                // sessionManagement()) is required with a STATELESS session policy. Spring
+                // Security's CsrfConfigurer always registers a CsrfAuthenticationStrategy into
+                // SessionManagementFilter's authentication-strategy chain, and that strategy
+                // deletes the XSRF-TOKEN cookie (an anti-fixation measure: rotate the CSRF token
+                // whenever a "new" authentication is detected). With no session, EVERY authenticated
+                // request looks like a new authentication, so it was deleting the cookie after the
+                // very first authenticated call following login -- confirmed by reproducing it with
+                // a plain unauthenticated fetch and tracing the call stack to
+                // CsrfAuthenticationStrategy.onAuthentication(). Setting the SAME no-op strategy on
+                // sessionManagement() does NOT fix this: that setter only feeds one branch of an
+                // internally-composed strategy list that CsrfConfigurer independently appends to;
+                // csrf()'s own sessionAuthenticationStrategy(...) is the one CsrfConfigurer actually
+                // checks before constructing its default CsrfAuthenticationStrategy.
                 .csrf(csrf -> csrf
                         .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
                         .csrfTokenRequestHandler(new CsrfTokenRequestAttributeHandler())
+                        .sessionAuthenticationStrategy(new NullAuthenticatedSessionStrategy())
                         .ignoringRequestMatchers(
                                 "/api/auth/login",
                                 "/api/auth/forgot-password",

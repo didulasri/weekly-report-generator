@@ -55,8 +55,13 @@
     --card-foreground: oklch(0.145 0 0);
     --popover: oklch(1 0 0);
     --popover-foreground: oklch(0.145 0 0);
-    --primary: oklch(0.205 0 0);
-    --primary-foreground: oklch(0.985 0 0);
+    /* Brand purple from the Figma design system (#1a0b2e) -- used across the login card's primary
+       button and the app shell's sidebar, so it's tokenized here rather than repeated as an
+       arbitrary hex value on every screen that needs it. oklch, not hex, purely to match every
+       other token in this file -- a hex value here works fine too (confirmed both render
+       identically once settled); this is a consistency choice, not a bug workaround. */
+    --primary: oklch(0.1947 0.0674 299.87); /* #1a0b2e */
+    --primary-foreground: oklch(1 0 0); /* #ffffff */
     --secondary: oklch(0.97 0 0);
     --secondary-foreground: oklch(0.205 0 0);
     --muted: oklch(0.97 0 0);
@@ -73,13 +78,17 @@
     --chart-4: oklch(0.371 0 0);
     --chart-5: oklch(0.269 0 0);
     --radius: 0.625rem;
-    --sidebar: oklch(0.985 0 0);
-    --sidebar-foreground: oklch(0.145 0 0);
-    --sidebar-primary: oklch(0.205 0 0);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.97 0 0);
-    --sidebar-accent-foreground: oklch(0.205 0 0);
-    --sidebar-border: oklch(0.922 0 0);
+    /* Sidebar tokens matched to the Figma app shell: dark purple sidebar, peach highlight on the
+       active nav item, translucent-white hover state. oklch for the same consistency reason as
+       --primary above. --sidebar-accent stays rgba() -- it's a genuinely translucent hover wash,
+       not a solid brand color standing in for one. */
+    --sidebar: oklch(0.1947 0.0674 299.87); /* #1a0b2e */
+    --sidebar-foreground: oklch(1 0 0); /* #ffffff */
+    --sidebar-primary: oklch(0.8422 0.0881 34.55); /* #ffb7a5 */
+    --sidebar-primary-foreground: oklch(0.1947 0.0674 299.87); /* #1a0b2e */
+    --sidebar-accent: rgba(255, 255, 255, 0.08);
+    --sidebar-accent-foreground: oklch(1 0 0); /* #ffffff */
+    --sidebar-border: oklch(0.2856 0.1087 292.52); /* #2e1a5a */
     --sidebar-ring: oklch(0.708 0 0);
 }
 

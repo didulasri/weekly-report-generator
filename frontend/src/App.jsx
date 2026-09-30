@@ -1,39 +1,40 @@
-import { Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes } from "react-router-dom";
 import Login from "@/pages/auth/Login.jsx";
+import PlaceholderPage from "@/pages/PlaceholderPage.jsx";
+import AppShell from "@/components/layout/AppShell.jsx";
 import ProtectedRoute from "@/routes/ProtectedRoute.jsx";
-import { useCurrentUser } from "@/hooks/useAuth";
+import RoleRoute from "@/routes/RoleRoute.jsx";
+import { NAV_ITEMS } from "@/routes/navItems";
 
-// Placeholder for the authenticated landing route -- roleHomePath() in useAuth.js is a deliberate
-// stub returning "/" until real dashboard/manager/admin pages exist. Rendered behind
-// ProtectedRoute so an unauthenticated visit to "/" still redirects to /login, but a user who just
-// authenticated (and was navigated to "/" by useLogin) actually lands here instead of bouncing
-// straight back to /login -- an unconditional <Navigate to="/login"> here would loop a fresh login
-// right back to the login screen.
-function AuthenticatedHomeStub() {
-  const { data: user } = useCurrentUser();
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-gray-50 p-4 text-center">
-      <p className="text-gray-600">
-        Signed in as <span className="font-medium">{user?.email}</span> ({user?.role}). No
-        landing page has been built yet.
-      </p>
-    </div>
-  );
-}
-
-// Minimal shell -- only enough routing exists to mount the screens built so far.
+// Route table built from NAV_ITEMS (routes/navItems.js) rather than hand-listed here, so a nav
+// link and its route can never drift apart -- adding/renaming a destination happens in exactly
+// one place. roleHomePath() in useAuth.js is still the "/" stub from the login checkpoint; "/"
+// itself just forwards to /reports, which is now a real (if placeholder) destination for every
+// role, rather than useLogin needing to know real paths yet.
 function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+
       <Route
-        path="/"
         element={
           <ProtectedRoute>
-            <AuthenticatedHomeStub />
+            <AppShell />
           </ProtectedRoute>
         }
-      />
+      >
+        {NAV_ITEMS.map((item) => {
+          const page = <PlaceholderPage title={item.label} />;
+          return (
+            <Route
+              key={item.path}
+              path={item.path}
+              element={item.roles ? <RoleRoute allow={item.roles}>{page}</RoleRoute> : page}
+            />
+          );
+        })}
+        <Route path="/" element={<Navigate to="/reports" replace />} />
+      </Route>
     </Routes>
   );
 }
