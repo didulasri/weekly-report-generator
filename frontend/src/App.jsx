@@ -1,10 +1,19 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import Login from "@/pages/auth/Login.jsx";
 import PlaceholderPage from "@/pages/PlaceholderPage.jsx";
+import MyReports from "@/pages/reports/MyReports.jsx";
+import CreateWeeklyReport from "@/pages/reports/CreateWeeklyReport.jsx";
 import AppShell from "@/components/layout/AppShell.jsx";
 import ProtectedRoute from "@/routes/ProtectedRoute.jsx";
 import RoleRoute from "@/routes/RoleRoute.jsx";
 import { NAV_ITEMS } from "@/routes/navItems";
+
+// Per-path page overrides -- a nav item still routes through the generic placeholder unless it has
+// a real screen here. Keyed by path so this stays a one-line addition per screen as more land.
+const PAGE_OVERRIDES = {
+  "/reports": MyReports,
+  "/reports/new": CreateWeeklyReport,
+};
 
 // Route table built from NAV_ITEMS (routes/navItems.js) rather than hand-listed here, so a nav
 // link and its route can never drift apart -- adding/renaming a destination happens in exactly
@@ -24,7 +33,8 @@ function App() {
         }
       >
         {NAV_ITEMS.map((item) => {
-          const page = <PlaceholderPage title={item.label} />;
+          const Page = PAGE_OVERRIDES[item.path];
+          const page = Page ? <Page /> : <PlaceholderPage title={item.label} />;
           return (
             <Route
               key={item.path}
