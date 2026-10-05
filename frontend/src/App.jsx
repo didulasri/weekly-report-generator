@@ -3,6 +3,9 @@ import Login from "@/pages/auth/Login.jsx";
 import PlaceholderPage from "@/pages/PlaceholderPage.jsx";
 import MyReports from "@/pages/reports/MyReports.jsx";
 import CreateWeeklyReport from "@/pages/reports/CreateWeeklyReport.jsx";
+import EditWeeklyReport from "@/pages/reports/EditWeeklyReport.jsx";
+import TeamReports from "@/pages/reports/TeamReports.jsx";
+import DashboardPage from "@/pages/DashboardPage.jsx";
 import AppShell from "@/components/layout/AppShell.jsx";
 import ProtectedRoute from "@/routes/ProtectedRoute.jsx";
 import RoleRoute from "@/routes/RoleRoute.jsx";
@@ -13,13 +16,15 @@ import { NAV_ITEMS } from "@/routes/navItems";
 const PAGE_OVERRIDES = {
   "/reports": MyReports,
   "/reports/new": CreateWeeklyReport,
+  "/dashboard": DashboardPage,
+  "/team": TeamReports,
 };
 
 // Route table built from NAV_ITEMS (routes/navItems.js) rather than hand-listed here, so a nav
 // link and its route can never drift apart -- adding/renaming a destination happens in exactly
 // one place. roleHomePath() in useAuth.js is still the "/" stub from the login checkpoint; "/"
-// itself just forwards to /reports, which is now a real (if placeholder) destination for every
-// role, rather than useLogin needing to know real paths yet.
+// itself forwards to /dashboard -- the one destination every role has (My Reports is now
+// TEAM_MEMBER-only, so redirecting there would 403 a manager/admin landing on "/").
 function App() {
   return (
     <Routes>
@@ -43,7 +48,9 @@ function App() {
             />
           );
         })}
-        <Route path="/" element={<Navigate to="/reports" replace />} />
+        {/* Not a nav item -- reached by clicking a row in My Reports, so it isn't in NAV_ITEMS. */}
+        <Route path="/reports/:reportId/edit" element={<EditWeeklyReport />} />
+        <Route path="/" element={<Navigate to="/dashboard" replace />} />
       </Route>
     </Routes>
   );

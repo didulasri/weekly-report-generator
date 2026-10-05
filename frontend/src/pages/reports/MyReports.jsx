@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Plus, Search } from "lucide-react";
 import PageHeader from "@/components/layout/PageHeader";
 import StatusBadge from "@/components/common/StatusBadge";
@@ -11,20 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-
-// Static mock rows -- UI-only checkpoint, no report service wired yet. Shapes mirror the eventual
-// backend response (ReportStatus enum values) so StatusBadge/REPORT_STATUSES keep being the single
-// source of truth for status display once this is wired to real data.
-const ALL_REPORTS = [
-  { week: "Week 42 (Oct 14 - Oct 20)", project: "Acme Platform", status: "APPROVED", hours: "38.5h", submitted: "Oct 20, 2024", reviewedBy: "Jane Doe (Manager)", current: true },
-  { week: "Week 41 (Oct 07 - Oct 13)", project: "Acme Platform", status: "APPROVED", hours: "40.0h", submitted: "Oct 13, 2024", reviewedBy: "Jane Doe (Manager)" },
-  { week: "Week 40 (Sep 30 - Oct 06)", project: "Billing Redesign", status: "SUBMITTED", hours: "39.0h", submitted: "Oct 06, 2024", reviewedBy: "Jane Doe (Manager)" },
-  { week: "Week 39 (Sep 23 - Sep 29)", project: "Billing Redesign", status: "APPROVED", hours: "42.5h", submitted: "Sep 29, 2024", reviewedBy: "Jane Doe (Manager)" },
-  { week: "Week 38 (Sep 16 - Sep 22)", project: "Security Audit", status: "NEEDS_CORRECTION", hours: "12.0h", submitted: "Sep 22, 2024", reviewedBy: "Jane Doe (Manager)" },
-  { week: "Week 37 (Sep 09 - Sep 15)", project: "Acme Platform", status: "APPROVED", hours: "40.0h", submitted: "Sep 15, 2024", reviewedBy: "Jane Doe (Manager)" },
-  { week: "Week 36 (Sep 02 - Sep 08)", project: "Security Audit", status: "APPROVED", hours: "41.5h", submitted: "Sep 08, 2024", reviewedBy: "Jane Doe (Manager)" },
-  { week: "Week 35 (Aug 26 - Sep 01)", project: "Acme Platform", status: "DRAFT", hours: "32.0h", submitted: "Not Submitted", reviewedBy: "—" },
-];
+import { MOCK_REPORTS } from "./mockReports";
 
 const STATUS_FILTERS = [
   { value: "ALL", label: "All Statuses" },
@@ -37,13 +25,14 @@ const STATUS_FILTERS = [
 const DATE_RANGES = ["Last 30 Days", "Last 90 Days", "This Year", "All Time"];
 
 export default function MyReports() {
+  const navigate = useNavigate();
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("ALL");
   const [dateRange, setDateRange] = useState("Last 90 Days");
 
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase();
-    return ALL_REPORTS.filter((report) => {
+    return MOCK_REPORTS.filter((report) => {
       const matchesSearch =
         !term || report.week.toLowerCase().includes(term) || report.project.toLowerCase().includes(term);
       const matchesStatus = status === "ALL" || report.status === status;
@@ -136,8 +125,11 @@ export default function MyReports() {
             <tbody>
               {filtered.map((report) => (
                 <tr
-                  key={report.week}
-                  className={`border-t border-slate-200 ${report.current ? "bg-indigo-50" : "bg-white"}`}
+                  key={report.id}
+                  onClick={() => navigate(`/reports/${report.id}/edit`)}
+                  className={`cursor-pointer border-t border-slate-200 transition-colors hover:bg-slate-50 ${
+                    report.current ? "bg-indigo-50 hover:bg-indigo-100/70" : "bg-white"
+                  }`}
                 >
                   <td className="px-5 py-3 font-medium text-slate-900">{report.week}</td>
                   <td className="truncate px-5 py-3 text-slate-600">{report.project}</td>

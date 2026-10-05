@@ -1,19 +1,34 @@
-import { FileText, FolderGit2, LayoutDashboard, PlusCircle, Users } from "lucide-react";
+import {
+  ClipboardList,
+  FileText,
+  FolderGit2,
+  LayoutDashboard,
+  PlusCircle,
+  Settings,
+  Users,
+} from "lucide-react";
 
 // Single source of truth for the sidebar nav AND the protected route table (App.jsx) -- both
 // import this so a path can never drift between "what's linked" and "what's routed". `roles`
-// omitted means every authenticated role sees it (My Reports / New Report); otherwise it's the
-// exact set from the task spec:
-//   TEAM_MEMBER   My Reports, New Report
-//   MANAGER       + Team Reports, Dashboard
-//   ADMIN         + Users, Projects
+// scopes an item to specific roles; omitted means every authenticated role sees it.
+//
+// Manager/admin get a genuinely different nav, not a superset of the team member's -- confirmed
+// against the Figma manager-dashboard and team-reports frames, which show no "My Reports"/"New
+// Report" for a manager (they review their team's reports, they don't file their own) and instead
+// surface Team Reports, Team Members, Projects, Settings. So this is role-specific lists, not one
+// shared list filtered down.
+//   TEAM_MEMBER   Dashboard, My Reports, New Report
+//   MANAGER       Dashboard, Team Reports, Team Members, Projects, Settings
+//   ADMIN         + Users (extends MANAGER's set -- no Figma frame for ADMIN yet, best guess)
 export const NAV_ITEMS = [
-  { label: "My Reports", path: "/reports", icon: FileText },
-  { label: "New Report", path: "/reports/new", icon: PlusCircle },
-  { label: "Team Reports", path: "/team", icon: Users, roles: ["MANAGER", "ADMIN"] },
-  { label: "Dashboard", path: "/dashboard", icon: LayoutDashboard, roles: ["MANAGER", "ADMIN"] },
+  { label: "Dashboard", path: "/dashboard", icon: LayoutDashboard },
+  { label: "My Reports", path: "/reports", icon: FileText, roles: ["TEAM_MEMBER"] },
+  { label: "New Report", path: "/reports/new", icon: PlusCircle, roles: ["TEAM_MEMBER"] },
+  { label: "Team Reports", path: "/team", icon: ClipboardList, roles: ["MANAGER", "ADMIN"] },
+  { label: "Team Members", path: "/team/members", icon: Users, roles: ["MANAGER", "ADMIN"] },
+  { label: "Projects", path: "/projects", icon: FolderGit2, roles: ["MANAGER", "ADMIN"] },
   { label: "Users", path: "/admin/users", icon: Users, roles: ["ADMIN"] },
-  { label: "Projects", path: "/admin/projects", icon: FolderGit2, roles: ["ADMIN"] },
+  { label: "Settings", path: "/settings", icon: Settings, roles: ["MANAGER", "ADMIN"] },
 ];
 
 export function navItemsForRole(role) {
