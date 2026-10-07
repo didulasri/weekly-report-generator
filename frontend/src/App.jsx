@@ -2,6 +2,11 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import Login from "@/pages/auth/Login.jsx";
 import ForgotPassword from "@/pages/auth/ForgotPassword.jsx";
 import ResetPassword from "@/pages/auth/ResetPassword.jsx";
+import AcceptInvitation from "@/pages/auth/AcceptInvitation.jsx";
+import InvitationExpired from "@/pages/auth/InvitationExpired.jsx";
+import InvitationInvalid from "@/pages/auth/InvitationInvalid.jsx";
+import InvitationAlreadyUsed from "@/pages/auth/InvitationAlreadyUsed.jsx";
+import AccountCreatedSuccess from "@/pages/auth/AccountCreatedSuccess.jsx";
 import PlaceholderPage from "@/pages/PlaceholderPage.jsx";
 import MyReports from "@/pages/reports/MyReports.jsx";
 import CreateWeeklyReport from "@/pages/reports/CreateWeeklyReport.jsx";
@@ -42,6 +47,11 @@ function App() {
       <Route path="/login" element={<Login />} />
       <Route path="/forgot-password" element={<ForgotPassword />} />
       <Route path="/reset-password" element={<ResetPassword />} />
+      <Route path="/accept-invitation" element={<AcceptInvitation />} />
+      <Route path="/invitation-expired" element={<InvitationExpired />} />
+      <Route path="/invitation-invalid" element={<InvitationInvalid />} />
+      <Route path="/invitation-already-used" element={<InvitationAlreadyUsed />} />
+      <Route path="/account-created" element={<AccountCreatedSuccess />} />
 
       <Route
         element={
