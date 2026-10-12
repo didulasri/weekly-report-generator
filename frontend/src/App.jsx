@@ -12,8 +12,10 @@ import MyReports from "@/pages/reports/MyReports.jsx";
 import CreateWeeklyReport from "@/pages/reports/CreateWeeklyReport.jsx";
 import EditWeeklyReport from "@/pages/reports/EditWeeklyReport.jsx";
 import TeamReports from "@/pages/reports/TeamReports.jsx";
+import ManagerReportDetail from "@/pages/reports/ManagerReportDetail.jsx";
 import TeamMembers from "@/pages/reports/TeamMembers.jsx";
 import ManagerProjects from "@/pages/reports/ManagerProjects.jsx";
+import ProjectDetail from "@/pages/reports/ProjectDetail.jsx";
 import UsersList from "@/pages/users/UsersList.jsx";
 import InviteUser from "@/pages/users/InviteUser.jsx";
 import UserDetail from "@/pages/users/UserDetail.jsx";
@@ -74,6 +76,22 @@ function App() {
         {/* Not nav items -- reached by clicking a row/button on their parent list, so they aren't
             in NAV_ITEMS. */}
         <Route path="/reports/:reportId/edit" element={<EditWeeklyReport />} />
+        <Route
+          path="/team/reports/:reportId"
+          element={
+            <RoleRoute allow={["MANAGER"]}>
+              <ManagerReportDetail />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="/projects/:projectId"
+          element={
+            <RoleRoute allow={["MANAGER", "ADMIN"]}>
+              <ProjectDetail />
+            </RoleRoute>
+          }
+        />
         <Route
           path="/admin/users/invite"
           element={

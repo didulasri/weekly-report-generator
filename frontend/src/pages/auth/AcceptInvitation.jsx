@@ -1,6 +1,6 @@
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useForm } from "react-hook-form";
-import { Info, User } from "lucide-react";
+import { Info, Loader2, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -8,30 +8,53 @@ import { Card } from "@/components/ui/card";
 import PasswordInput from "@/components/common/PasswordInput.jsx";
 import { passwordStrengthRules } from "@/utils/passwordRules";
 import { ROLE_LABELS } from "@/utils/constants";
-
-// No live invitation lookup yet -- this checkpoint is UI only, so the invite details are a
-// representative stand-in for what /invitations/validate would return.
-const INVITE = {
-  name: "Sarah Chen",
-  email: "sarah.chen@company.com",
-  role: "TEAM_MEMBER",
-};
+import { useAcceptInvitation, useValidateInvitation } from "@/hooks/useAuthFlows";
+import { getApiErrorMessage } from "@/utils/apiError";
+import InvitationInvalid from "./InvitationInvalid";
 
 export default function AcceptInvitation() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const token = searchParams.get("token");
+
+  const invitationQuery = useValidateInvitation(token);
+  const acceptInvitationMutation = useAcceptInvitation();
 
   const {
     register,
     handleSubmit,
     watch,
     formState: { errors },
-  } = useForm({ defaultValues: { password: "", confirmPassword: "" } });
+  } = useForm({ defaultValues: { name: "", password: "", confirmPassword: "" } });
 
   const password = watch("password");
 
-  // No submit handler wired to a service yet -- this checkpoint is UI only.
-  const onSubmit = () => {
-    navigate("/account-created");
+  // No token at all, or the backend rejected it (expired/revoked/already-used/unknown -- it never
+  // distinguishes which, by design) -- either way there's no invitation to accept.
+  if (!token || invitationQuery.isError) {
+    return <InvitationInvalid />;
+  }
+
+  if (invitationQuery.isPending) {
+    return (
+      <div className="flex min-h-screen w-full items-center justify-center gap-2 bg-[#f8f8fa] text-sm text-slate-500">
+        <Loader2 className="size-4 animate-spin" />
+        Checking your invitation…
+      </div>
+    );
+  }
+
+  const invite = invitationQuery.data;
+
+  const onSubmit = (values) => {
+    acceptInvitationMutation.mutate(
+      { token, name: values.name, password: values.password },
+      {
+        onSuccess: (user) => {
+          navigate("/account-created", { state: { role: user.role } });
+        },
+      },
+    );
   };
 
   return (
@@ -52,7 +75,7 @@ export default function AcceptInvitation() {
         <div className="flex items-center gap-2.5 rounded-lg border border-[#ffb7a5] bg-[#fff0ed] p-3">
           <User className="size-[18px] shrink-0 text-[#1a0b2e]" />
           <p className="text-[13px] font-semibold text-[#1a0b2e]">
-            You&apos;ve been invited as a {ROLE_LABELS[INVITE.role]}
+            You&apos;ve been invited as a {ROLE_LABELS[invite.role] ?? invite.role}
           </p>
         </div>
 
@@ -63,7 +86,6 @@ export default function AcceptInvitation() {
             </Label>
             <Input
               id="name"
-              defaultValue={INVITE.name}
               aria-invalid={errors.name ? "true" : "false"}
               className="h-11 rounded-lg border-[#e2e8f0] bg-[#f8fafc] px-3.5 py-3 text-base text-[#0f172a] md:text-sm"
               {...register("name", { required: "Full name is required" })}
@@ -81,7 +103,7 @@ export default function AcceptInvitation() {
             </Label>
             <Input
               id="email"
-              value={INVITE.email}
+              value={invite.email}
               readOnly
               disabled
               className="h-11 rounded-lg border-[#e2e8f0] bg-[#f1f5f9] px-3.5 py-3 text-base text-[#475569] md:text-sm"
@@ -94,7 +116,7 @@ export default function AcceptInvitation() {
             </Label>
             <Input
               id="role"
-              value={ROLE_LABELS[INVITE.role]}
+              value={ROLE_LABELS[invite.role] ?? invite.role}
               readOnly
               disabled
               className="h-11 rounded-lg border-[#e2e8f0] bg-[#f1f5f9] px-3.5 py-3 text-base text-[#475569] md:text-sm"
@@ -149,7 +171,18 @@ export default function AcceptInvitation() {
             </p>
           </div>
 
-          <Button type="submit" className="h-11 w-full rounded-lg text-sm font-semibold">
+          {acceptInvitationMutation.isError && (
+            <p className="text-xs text-destructive" role="alert">
+              {getApiErrorMessage(acceptInvitationMutation.error)}
+            </p>
+          )}
+
+          <Button
+            type="submit"
+            disabled={acceptInvitationMutation.isPending}
+            className="h-11 w-full rounded-lg text-sm font-semibold"
+          >
+            {acceptInvitationMutation.isPending && <Loader2 className="size-4 animate-spin" />}
             Complete Account Setup
           </Button>
         </form>

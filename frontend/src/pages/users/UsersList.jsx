@@ -1,7 +1,8 @@
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Plus, Search } from "lucide-react";
+import { Loader2, Plus, Search } from "lucide-react";
 import PageHeader from "@/components/layout/PageHeader";
+import EmptyState from "@/components/feedback/EmptyState";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -11,7 +12,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ALL_USERS } from "./mockUsers";
+import { useUsers } from "@/hooks/useUsers";
+import { getApiErrorMessage } from "@/utils/apiError";
 
 const ROLE_BADGE = {
   TEAM_MEMBER: { label: "Team Member", className: "bg-slate-100 text-slate-600 border-slate-300" },
@@ -60,37 +62,69 @@ const ROLE_FILTERS = [
   { value: "ADMIN", label: "Admin" },
 ];
 
+// The backend only tracks a boolean active flag -- there is no PENDING user state (an invitation
+// that hasn't been accepted yet is a row in the invitations table, not a user row), so this filter
+// has two real options rather than the three the mock data used to have.
 const STATUS_FILTERS = [
   { value: "ALL", label: "Status: All" },
   { value: "ACTIVE", label: "Active" },
-  { value: "PENDING", label: "Pending" },
   { value: "SUSPENDED", label: "Suspended" },
 ];
 
+const PAGE_SIZE = 10;
+
 export default function UsersList() {
   const navigate = useNavigate();
+  const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [role, setRole] = useState("ALL");
   const [status, setStatus] = useState("ALL");
+  const [page, setPage] = useState(0);
 
-  const filtered = useMemo(() => {
-    const term = search.trim().toLowerCase();
-    return ALL_USERS.filter((user) => {
-      const matchesSearch =
-        !term || user.name.toLowerCase().includes(term) || user.email.toLowerCase().includes(term);
-      const matchesRole = role === "ALL" || user.role === role;
-      const matchesStatus = status === "ALL" || user.status === status;
-      return matchesSearch && matchesRole && matchesStatus;
-    });
-  }, [search, role, status]);
+  // Debounce the search box so every keystroke doesn't fire a request -- 350ms matches the
+  // typical pause between a user finishing typing and expecting results. Resets the page here too
+  // (rather than in a separate effect keyed on every filter) so a filter change and its page reset
+  // land in the same render instead of cascading into a second one.
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      setSearch(searchInput.trim());
+      setPage(0);
+    }, 350);
+    return () => clearTimeout(timeout);
+  }, [searchInput]);
 
-  const hasActiveFilters = search !== "" || role !== "ALL" || status !== "ALL";
+  function handleRoleChange(value) {
+    setRole(value);
+    setPage(0);
+  }
+
+  function handleStatusChange(value) {
+    setStatus(value);
+    setPage(0);
+  }
+
+  const { data, isPending, isError, error, isFetching } = useUsers({
+    role: role === "ALL" ? undefined : role,
+    active: status === "ALL" ? undefined : status === "ACTIVE",
+    search: search || undefined,
+    page,
+    size: PAGE_SIZE,
+  });
+
+  const users = data?.content ?? [];
+  const totalElements = data?.totalElements ?? 0;
+  const hasActiveFilters = searchInput !== "" || role !== "ALL" || status !== "ALL";
 
   function clearFilters() {
+    setSearchInput("");
     setSearch("");
     setRole("ALL");
     setStatus("ALL");
+    setPage(0);
   }
+
+  const rangeStart = totalElements === 0 ? 0 : page * PAGE_SIZE + 1;
+  const rangeEnd = Math.min(totalElements, page * PAGE_SIZE + users.length);
 
   return (
     <div className="flex flex-col gap-4">
@@ -111,14 +145,14 @@ export default function UsersList() {
           <div className="relative w-full sm:w-[220px]">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
             <Input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
               placeholder="Search users..."
               className="h-8 pl-8 text-[13px]"
             />
           </div>
 
-          <Select value={role} onValueChange={setRole}>
+          <Select value={role} onValueChange={handleRoleChange}>
             <SelectTrigger className="h-8 w-fit gap-1.5 text-[13px]">
               <SelectValue />
             </SelectTrigger>
@@ -131,7 +165,7 @@ export default function UsersList() {
             </SelectContent>
           </Select>
 
-          <Select value={status} onValueChange={setStatus}>
+          <Select value={status} onValueChange={handleStatusChange}>
             <SelectTrigger className="h-8 w-fit gap-1.5 text-[13px]">
               <SelectValue />
             </SelectTrigger>
@@ -157,78 +191,123 @@ export default function UsersList() {
       </div>
 
       <div className="flex flex-col rounded-xl border border-slate-200 bg-white shadow-[0_1px_1.5px_rgba(0,0,0,0.04)]">
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[900px] table-fixed border-collapse text-[13px]">
-            <thead>
-              <tr className="bg-slate-100 text-left text-xs font-semibold text-slate-600">
-                <th className="w-[190px] px-4 py-3 font-semibold">Name</th>
-                <th className="w-[190px] px-4 py-3 font-semibold">Email</th>
-                <th className="w-[140px] px-4 py-3 font-semibold">Role</th>
-                <th className="w-[100px] px-4 py-3 font-semibold">Status</th>
-                <th className="w-[115px] whitespace-nowrap px-4 py-3 font-semibold">Created Date</th>
-                <th className="w-[115px] whitespace-nowrap px-4 py-3 text-right font-semibold">Last Login</th>
-                <th className="w-[56px] px-4 py-3 text-right font-semibold">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((user) => (
-                <tr
-                  key={user.email}
-                  onClick={() => navigate(`/admin/users/${user.id}`)}
-                  className="cursor-pointer border-t border-slate-200 transition-colors hover:bg-slate-50"
-                >
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-2">
-                      <div className="flex size-7 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-slate-100 text-[11px] font-semibold text-slate-600">
-                        {user.initials}
-                      </div>
-                      <span className="truncate font-semibold text-slate-900">{user.name}</span>
-                    </div>
-                  </td>
-                  <td className="truncate px-4 py-3 text-slate-600">{user.email}</td>
-                  <td className="px-4 py-3">
-                    <RoleBadge role={user.role} />
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-3">
-                    <StatusBadge status={user.status} />
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-3 text-slate-600">{user.created}</td>
-                  <td className="whitespace-nowrap px-4 py-3 text-right text-slate-600">{user.lastLogin}</td>
-                  <td className="px-4 py-3 text-right">
-                    <button
-                      type="button"
-                      onClick={(e) => e.stopPropagation()}
-                      className="text-base font-bold text-slate-500"
-                      aria-label="Row actions"
-                    >
-                      •••
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              {filtered.length === 0 && (
-                <tr>
-                  <td colSpan={7} className="px-4 py-10 text-center text-sm text-slate-500">
-                    No users match your filters.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        <div className="flex flex-wrap items-center justify-between gap-3 p-4">
-          <p className="text-xs text-slate-600">Showing 1-{filtered.length} of 47 users</p>
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm" disabled className="h-7 px-3 text-xs font-semibold">
-              Previous
-            </Button>
-            <Button variant="outline" size="sm" className="h-7 px-3 text-xs font-semibold text-slate-900">
-              Next
-            </Button>
+        {isPending ? (
+          <div className="flex items-center justify-center gap-2 px-4 py-16 text-sm text-slate-500">
+            <Loader2 className="size-4 animate-spin" />
+            Loading users…
           </div>
-        </div>
+        ) : isError ? (
+          <EmptyState
+            title="Couldn't load users"
+            description={getApiErrorMessage(error)}
+          />
+        ) : (
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[900px] table-fixed border-collapse text-[13px]">
+                <thead>
+                  <tr className="bg-slate-100 text-left text-xs font-semibold text-slate-600">
+                    <th className="w-[200px] px-4 py-3 font-semibold">Name</th>
+                    <th className="w-[220px] px-4 py-3 font-semibold">Email</th>
+                    <th className="w-[130px] px-4 py-3 font-semibold">Role</th>
+                    <th className="w-[100px] px-4 py-3 font-semibold">Status</th>
+                    <th className="w-[115px] whitespace-nowrap px-4 py-3 font-semibold">Created Date</th>
+                    <th className="w-[85px] whitespace-nowrap px-4 py-3 text-right font-semibold">Projects</th>
+                    <th className="w-[85px] whitespace-nowrap px-4 py-3 text-right font-semibold">Reports</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {users.map((user) => (
+                    <tr
+                      key={user.id}
+                      onClick={() => navigate(`/admin/users/${user.id}`)}
+                      className="cursor-pointer border-t border-slate-200 transition-colors hover:bg-slate-50"
+                    >
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          <div className="flex size-7 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-slate-100 text-[11px] font-semibold text-slate-600">
+                            {initialsOf(user.name)}
+                          </div>
+                          <span className="truncate font-semibold text-slate-900">{user.name}</span>
+                        </div>
+                      </td>
+                      <td className="truncate px-4 py-3 text-slate-600">{user.email}</td>
+                      <td className="px-4 py-3">
+                        <RoleBadge role={user.role} />
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3">
+                        <StatusBadge status={user.active ? "ACTIVE" : "SUSPENDED"} />
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-slate-600">
+                        {formatDate(user.createdAt)}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right text-slate-600">
+                        {user.projectCount}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right text-slate-600">
+                        {user.reportCount}
+                      </td>
+                    </tr>
+                  ))}
+                  {users.length === 0 && (
+                    <tr>
+                      <td colSpan={7} className="px-4 py-10 text-center text-sm text-slate-500">
+                        No users match your filters.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-3 p-4">
+              <p className="text-xs text-slate-600">
+                {totalElements === 0
+                  ? "No users"
+                  : `Showing ${rangeStart}-${rangeEnd} of ${totalElements} users`}
+                {isFetching && !isPending && " · refreshing…"}
+              </p>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={page === 0}
+                  onClick={() => setPage((p) => Math.max(0, p - 1))}
+                  className="h-7 px-3 text-xs font-semibold"
+                >
+                  Previous
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={data?.last ?? true}
+                  onClick={() => setPage((p) => p + 1)}
+                  className="h-7 px-3 text-xs font-semibold text-slate-900"
+                >
+                  Next
+                </Button>
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
+}
+
+function initialsOf(name) {
+  if (!name) return "?";
+  const parts = name.trim().split(/\s+/);
+  const first = parts[0]?.[0] ?? "";
+  const last = parts.length > 1 ? parts[parts.length - 1][0] : "";
+  return (first + last).toUpperCase();
+}
+
+function formatDate(isoString) {
+  if (!isoString) return "—";
+  return new Date(isoString).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
 }

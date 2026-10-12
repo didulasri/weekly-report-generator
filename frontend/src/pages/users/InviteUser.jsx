@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useForm } from "react-hook-form";
-import { FileText } from "lucide-react";
+import { FileText, Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,30 +13,54 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useCreateInvitation } from "@/hooks/useInvitations";
 import { emailRules } from "@/utils/passwordRules";
 import { ROLE_LABELS } from "@/utils/constants";
+import { getApiErrorMessage, getApiFieldError } from "@/utils/apiError";
 
-const ROLE_OPTIONS = Object.keys(ROLE_LABELS);
+// Admins only invite into these two roles -- a second ADMIN is provisioned directly (see
+// AdminBootstrapRunner on the backend), never through this invite flow.
+const ROLE_OPTIONS = ["TEAM_MEMBER", "MANAGER"];
 
 export default function InviteUser() {
   const navigate = useNavigate();
   const [role, setRole] = useState("TEAM_MEMBER");
+  const createInvitation = useCreateInvitation();
 
   const {
     register,
     handleSubmit,
+    setError,
     formState: { errors },
   } = useForm({ defaultValues: { email: "" } });
 
-  // No submit handler wired to a service yet -- this checkpoint is UI only.
-  const onSubmit = () => {
-    navigate("/admin/users");
+  const onSubmit = ({ email }) => {
+    createInvitation.mutate(
+      { email, role },
+      {
+        onSuccess: () => {
+          toast.success(`Invitation sent to ${email}`);
+          navigate("/admin/users");
+        },
+        onError: (error) => {
+          const fieldError = getApiFieldError(error);
+          if (fieldError && fieldError.field === "email") {
+            setError("email", { type: "server", message: fieldError.message });
+          } else {
+            toast.error(getApiErrorMessage(error));
+          }
+        },
+      }
+    );
   };
 
   return (
     <div className="flex flex-col gap-6">
       <p className="flex flex-wrap items-center gap-2 text-[13px]">
-        <Link to="/admin/users" className="font-medium text-slate-500 hover:text-slate-700">
+        <Link
+          to="/admin/users"
+          className="font-medium text-slate-500 hover:text-slate-700"
+        >
           Users
         </Link>
         <span className="text-slate-400">/</span>
@@ -51,7 +76,10 @@ export default function InviteUser() {
           <h1 className="text-lg font-bold text-slate-900">Invite New User</h1>
 
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="email" className="text-[13px] font-semibold text-slate-600">
+            <Label
+              htmlFor="email"
+              className="text-[13px] font-semibold text-slate-600"
+            >
               Work Email
             </Label>
             <Input
@@ -74,11 +102,17 @@ export default function InviteUser() {
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="role" className="text-[13px] font-semibold text-slate-600">
+            <Label
+              htmlFor="role"
+              className="text-[13px] font-semibold text-slate-600"
+            >
               Role
             </Label>
             <Select value={role} onValueChange={setRole}>
-              <SelectTrigger id="role" className="h-10 w-full justify-between rounded-md text-[13px]">
+              <SelectTrigger
+                id="role"
+                className="h-10 w-full justify-between rounded-md text-[13px]"
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -94,17 +128,33 @@ export default function InviteUser() {
           <div className="flex gap-3 rounded-lg border border-blue-200 bg-blue-50 p-4">
             <FileText className="size-[18px] shrink-0 text-blue-700" />
             <p className="flex-1 text-[13px] leading-5 text-blue-700">
-              The user will receive a secure invitation link to create their account. The
-              invitation expires after 48 hours.
+              The user will receive a secure invitation link to create their
+              account. The invitation expires after 48 hours.
             </p>
           </div>
 
           <div className="flex justify-end gap-3">
-            <Button type="button" variant="outline" className="h-9 px-4 text-[13px] font-semibold" asChild>
+            <Button
+              type="button"
+              variant="outline"
+              className="h-9 px-4 text-[13px] font-semibold"
+              asChild
+            >
               <Link to="/admin/users">Cancel</Link>
             </Button>
-            <Button type="submit" className="h-9 px-4 text-[13px] font-semibold">
-              Send Invitation
+            <Button
+              type="submit"
+              disabled={createInvitation.isPending}
+              className="h-9 px-4 text-[13px] font-semibold"
+            >
+              {createInvitation.isPending ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" />
+                  Sending…
+                </>
+              ) : (
+                "Send Invitation"
+              )}
             </Button>
           </div>
         </form>

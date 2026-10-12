@@ -1,11 +1,15 @@
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useForm } from "react-hook-form";
-import { Check } from "lucide-react";
+import { Check, Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
 import PasswordInput from "@/components/common/PasswordInput.jsx";
 import { passwordStrengthRules } from "@/utils/passwordRules";
+import { useResetPassword } from "@/hooks/useAuthFlows";
+import { getApiErrorMessage } from "@/utils/apiError";
+import InvitationInvalid from "./InvitationInvalid";
 
 const REQUIREMENTS = [
   { label: "At least 8 characters", test: (value) => value.length >= 8 },
@@ -17,6 +21,8 @@ const REQUIREMENTS = [
 
 export default function ResetPassword() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const token = searchParams.get("token");
 
   const {
     register,
@@ -26,10 +32,26 @@ export default function ResetPassword() {
   } = useForm({ defaultValues: { password: "", confirmPassword: "" } });
 
   const password = watch("password");
+  const resetPasswordMutation = useResetPassword();
 
-  // No submit handler wired to a service yet -- this checkpoint is UI only.
-  const onSubmit = () => {
-    navigate("/login");
+  // No token in the URL at all -- this link was never a real reset link, so there's nothing to
+  // submit against. A token that IS present but wrong/expired/used can only be discovered on
+  // submit (there's no separate validate-token endpoint for password resets like there is for
+  // invitations), so that case is handled by the mutation's error state below instead.
+  if (!token) {
+    return <InvitationInvalid />;
+  }
+
+  const onSubmit = (values) => {
+    resetPasswordMutation.mutate(
+      { token, newPassword: values.password },
+      {
+        onSuccess: () => {
+          toast.success("Password reset. Please sign in with your new password.");
+          navigate("/login");
+        },
+      },
+    );
   };
 
   return (
@@ -108,7 +130,18 @@ export default function ResetPassword() {
             })}
           </div>
 
-          <Button type="submit" className="h-11 w-full rounded-lg text-sm font-semibold">
+          {resetPasswordMutation.isError && (
+            <p className="text-xs text-destructive" role="alert">
+              {getApiErrorMessage(resetPasswordMutation.error)}
+            </p>
+          )}
+
+          <Button
+            type="submit"
+            disabled={resetPasswordMutation.isPending}
+            className="h-11 w-full rounded-lg text-sm font-semibold"
+          >
+            {resetPasswordMutation.isPending && <Loader2 className="size-4 animate-spin" />}
             Reset Password
           </Button>
         </form>
