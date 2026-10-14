@@ -16,9 +16,9 @@ import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
-import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.authentication.session.NullAuthenticatedSessionStrategy;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
+import org.springframework.security.web.csrf.CsrfFilter;
 import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
 import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter;
 import org.springframework.web.cors.CorsConfiguration;
@@ -135,11 +135,15 @@ public class SecurityConfig {
                         .permitAll()
                         .anyRequest().authenticated())
                 .authenticationProvider(authenticationProvider())
-                // jwtAuthenticationFilter must be registered (relative to a standard Spring
-                // Security filter) before a second custom filter can be positioned relative to IT
-                // -- so this has to come first, even though rateLimitFilter is the one that should
-                // actually run earliest in the chain.
-                .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
+                // Before CsrfFilter (not just before UsernamePasswordAuthenticationFilter, which
+                // CsrfFilter already runs ahead of by default): CsrfFilter is a non-authenticating
+                // filter that fires on every unsafe-method request regardless of login state, so if
+                // jwtAuthenticationFilter ran after it, a CSRF rejection on an unauthenticated
+                // request and one on a genuinely logged-in request would be indistinguishable here
+                // -- SecurityContext would still be anonymous either way. Running JWT auth first
+                // means CustomAccessDeniedHandler can tell "never logged in" (401) apart from
+                // "logged in, just forgot the CSRF header" (403) for the exact same CsrfException.
+                .addFilterBefore(jwtAuthenticationFilter, CsrfFilter.class)
                 .addFilterBefore(rateLimitFilter, JwtAuthenticationFilter.class);
 
         return http.build();

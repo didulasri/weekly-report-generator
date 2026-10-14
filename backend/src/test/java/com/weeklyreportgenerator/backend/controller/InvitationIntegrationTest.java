@@ -13,6 +13,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
@@ -104,8 +105,12 @@ class InvitationIntegrationTest {
         String listResponse = mockMvc.perform(get("/api/admin/invitations?status=PENDING&size=200")
                         .with(admin))
                 .andReturn().getResponse().getContentAsString();
-        Integer id = JsonPath.read(listResponse, "$.content[?(@.email=='" + email + "')].id[0]");
-        return id.longValue();
+        // Trailing "[0]" on a JsonPath filter result is a common trap: with a filter already
+        // returning a list, ".id[0]" is parsed as "index into each match's id field", not "take
+        // the first match's id" -- it silently returns a JSONArray instead of a scalar. Read the
+        // projected list of ids and index into THAT instead.
+        List<Integer> ids = JsonPath.read(listResponse, "$.content[?(@.email=='" + email + "')].id");
+        return ids.get(0).longValue();
     }
 
     // Creates an invitation as admin and returns the raw token that would have been emailed.

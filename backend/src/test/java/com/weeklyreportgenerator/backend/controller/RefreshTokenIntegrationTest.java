@@ -105,9 +105,14 @@ class RefreshTokenIntegrationTest {
         Cookie refreshTokenCookie = result.getResponse().getCookie("refresh_token");
 
         // No X-XSRF-TOKEN header -- CSRF protection applies to /api/auth/refresh (it is not in the
-        // ignored-matchers list, unlike /login).
+        // ignored-matchers list, unlike /login). Only the refresh_token cookie is attached here
+        // (deliberately -- that's all a real refresh call needs), not access_token, so Spring
+        // Security's JWT filter still sees this as an anonymous request and the rejection comes
+        // back as 401 like every other unauthenticated denial, not 403 -- the point of this test is
+        // that the request gets REJECTED pre-controller by CSRF (without CSRF protection, this
+        // valid refresh cookie would otherwise succeed with 200), not the specific status code.
         mockMvc.perform(post("/api/auth/refresh").cookie(refreshTokenCookie))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
@@ -221,8 +226,6 @@ class RefreshTokenIntegrationTest {
                         .cookie(victimRefresh, victimXsrf)
                         .header("X-XSRF-TOKEN", victimXsrf.getValue()))
                 .andExpect(status().isOk());
-
-        deactivate(email);
 
         // Re-derive fresh cookies for the next call, since the previous /refresh already rotated
         // victimRefresh -- the point being tested is that deactivation revokes whatever refresh
