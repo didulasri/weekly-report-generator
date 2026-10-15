@@ -8,7 +8,11 @@ spring:
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/weekly_report_db}
     username: ${DB_USERNAME:postgres}
-    password: ${DB_PASSWORD:didulapostgre123}
+    # No fallback -- a real credential must never have a working default committed to git. Set it
+    # in a local, gitignored backend/.env (see .env.example) for dev, or a real secret store in
+    # any other environment. Spring fails fast on startup if it's missing, rather than silently
+    # running with someone's leaked password.
+    password: ${DB_PASSWORD}
 
   jpa:
     hibernate:
