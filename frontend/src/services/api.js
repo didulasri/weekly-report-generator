@@ -7,7 +7,7 @@ import axios from "axios";
 // echo it back as X-XSRF-TOKEN on state-changing requests -- no hand-written CSRF interceptor
 // needed, axios's built-in double-submit support does exactly what the backend expects.
 const api = axios.create({
-  baseURL: "/api",
+  baseURL: import.meta.env.VITE_API_BASE_URL || "/api",
   withCredentials: true,
   xsrfCookieName: "XSRF-TOKEN",
   xsrfHeaderName: "X-XSRF-TOKEN",

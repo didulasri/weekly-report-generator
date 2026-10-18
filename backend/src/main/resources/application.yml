@@ -1,4 +1,7 @@
 spring:
+  config:
+    import: optional:file:.env[.properties]
+
   application:
     name: backend
 
@@ -7,7 +10,7 @@ spring:
 
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/weekly_report_db}
-    username: ${DB_USERNAME:postgres}
+    username: ${DB_USERNAME}
     # No fallback -- a real credential must never have a working default committed to git. Set it
     # in a local, gitignored backend/.env (see .env.example) for dev, or a real secret store in
     # any other environment. Spring fails fast on startup if it's missing, rather than silently
@@ -41,7 +44,7 @@ spring:
 
 app:
   jwt:
-    secret: ${JWT_SECRET:dev-only-secret-key-change-me-please-32bytes-min}
+    secret: ${JWT_SECRET}
     # 15 minutes -- short on purpose, since the refresh_token cookie (7 days, rotated on every use)
     # is what actually keeps a session alive.
     expiration-ms: ${JWT_EXPIRATION_MS:900000}
